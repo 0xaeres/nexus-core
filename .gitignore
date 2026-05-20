@@ -1,0 +1,53 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.venv/
+venv/
+.python-version
+
+# uv
+.uv-cache/
+
+# Build
+build/
+dist/
+*.egg
+
+# Test / coverage
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+
+# Local state
+nexus.yaml
+.env
+*.db
+*.sqlite
+*.sqlite3
+
+# Skills (cloned at runtime — never committed to the app repo)
+skills/
+org-skills/
+
+# GGUF model weights (large, downloaded out-of-band)
+models/
+
+# PID files for host services
+.pids/
+
+# Local state DBs (proposal queue, council checkpoints)
+data/
+
+# Logs
+*.log
+logs/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+.DS_Store

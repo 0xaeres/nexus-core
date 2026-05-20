@@ -1,0 +1,134 @@
+# Nexus configuration — see ENGINEERING.md §15 for the full schema.
+# Apple Silicon dev defaults: embedding + reranker served locally via llama.cpp,
+# light LLMs via Ollama, council LLMs via DeepInfra (cloud).
+
+# Skill repos — cloned on boot, pushed to on approve
+skills_repo: git@github.com:myorg/nexus-skills-forge.git
+org_skills_repo: git@github.com:nexus-community/org-skills.git
+
+hierarchy_root: ./skills           # in prod, an ephemeral clone of skills_repo
+org_library_root: ./org-skills     # in prod, an ephemeral clone of org_skills_repo
+# For local dev with no skills repo, point at the bundled seeds instead:
+# hierarchy_root: ./nexus/skills/seed
+# org_library_root: ./nexus/skills/seed/org
+
+# ---------------------------------------------------------------- Connectors
+connectors:
+  - name: github
+    type: github
+    token: ${GITHUB_TOKEN}
+    repos: ["myorg/my-repo"]
+    index: [code, pull_requests, issues, discussions]
+    watch: true
+
+# Example additional connectors (commented out by default):
+#  - name: confluence
+#    type: confluence
+#    base_url: https://myorg.atlassian.net
+#    token: ${CONFLUENCE_TOKEN}
+#    spaces: ["ENG", "ARCH"]
+#    watch: false
+
+# ---------------------------------------------------------------- Storage
+vector_store:
+  url: http://localhost:6333
+  collections:
+    code: nexus_code
+    text: nexus_text
+    cache: nexus_cache
+
+graph:
+  url: bolt://localhost:7687
+  user: ${NEO4J_USER}
+  password: ${NEO4J_PASSWORD}
+
+# ---------------------------------------------------------------- Models
+# Council LLMs: cloud (DeepInfra) by default. Swap to ollama for offline dev.
+models:
+  council_agents:               # Archaeologist, Domain Expert — context-assembly tier
+    provider: deepinfra
+    model: deepseek-ai/DeepSeek-V4-Flash
+    api_key: ${DEEPINFRA_API_KEY}
+  synthesizer:                  # reasoning tier
+    provider: deepinfra
+    model: Qwen/Qwen3-Max-Thinking
+    api_key: ${DEEPINFRA_API_KEY}
+  adversary:                    # reasoning tier
+    provider: deepinfra
+    model: Qwen/Qwen3-Max-Thinking
+    api_key: ${DEEPINFRA_API_KEY}
+  pr_review:                    # code/agentic tier
+    provider: deepinfra
+    model: MiniMaxAI/MiniMax-M2.5
+    api_key: ${DEEPINFRA_API_KEY}
+  changelog:                    # mid-size efficient
+    provider: deepinfra
+    model: Qwen/Qwen3.6-35B-A3B
+    api_key: ${DEEPINFRA_API_KEY}
+  curator:                      # agentic + web search
+    provider: deepinfra
+    model: zai-org/GLM-5
+    api_key: ${DEEPINFRA_API_KEY}
+  light:                        # local on Apple Silicon — relation extractor, HyDE, classifier, enricher
+    provider: ollama
+    model: qwen2.5:3b
+    base_url: http://localhost:11434
+
+  # Local embedding + reranker via llama.cpp on Metal
+  embedding:
+    provider: jina-local
+    model: jinaai/jina-embeddings-v4
+    url: http://localhost:8080
+  reranker:
+    provider: jina-local
+    model: jinaai/jina-reranker-v3
+    url: http://localhost:8081
+
+  # ---- alternate profiles (override per role) ----
+  # Fully offline dev (zero cost):
+  # council_agents: { provider: ollama, model: qwen2.5:14b, base_url: http://localhost:11434 }
+  #
+  # Cloud showcase (highest quality):
+  # synthesizer:    { provider: anthropic, model: claude-sonnet-4-6, api_key: ${ANTHROPIC_API_KEY} }
+
+# ---------------------------------------------------------------- Observability
+observability:
+  langfuse:
+    enabled: true
+    host: http://localhost:3001
+    public_key: ${LANGFUSE_PUBLIC_KEY}
+    secret_key: ${LANGFUSE_SECRET_KEY}
+
+# ---------------------------------------------------------------- Cache
+cache:
+  semantic_threshold: 0.92      # cosine similarity cutoff for cache hit
+  ttl_hours: 24
+
+# ---------------------------------------------------------------- Ingestion
+ingestion:
+  enrich_chunks:
+    docs: true                  # LLM context summary prepend (+8–15% precision)
+    code: false                 # tree-sitter structure is sufficient
+  extract_relations:
+    docs: true                  # mine entities + relations into Neo4j
+    code: false                 # noisy without further heuristics; off by default
+  embed_batch_size: 32
+  quality_gate_threshold: 0.3   # reranker score below this → chunk filtered
+
+# ---------------------------------------------------------------- Retrieval
+retrieval:
+  hyde_enabled: true
+  simple_query_threshold: 0.8   # classifier confidence above this → simple path
+  circuit_breaker:
+    failure_threshold: 3
+    recovery_timeout_s: 30
+
+# ---------------------------------------------------------------- Server
+server:
+  host: 0.0.0.0
+  port: 8000
+  webhook_secret: ${GITHUB_WEBHOOK_SECRET}
+
+storage:
+  proposal_queue: ./data/proposals.db
+  council_checkpoint: ./data/council.sqlite

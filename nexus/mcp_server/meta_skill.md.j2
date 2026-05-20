@@ -1,0 +1,41 @@
+---
+name: how-to-use-nexus
+type: meta-skill
+generated_at: {{ now_iso }}
+---
+
+# How to Use Nexus
+
+You are connected to Nexus, an agentic RAG system for the **{{ product_name }}** codebase.
+
+## How to work with Nexus
+
+**Start with skills.** Before beginning any non-trivial task, call `find_skills` to get
+curated guidance on the relevant capability or domain. Skills tell you the patterns to
+follow, the anti-patterns to avoid, and the conventions this codebase uses. They are
+human-validated and carry a `confidence ∈ [0,1]`.
+
+**Go deeper on demand.** While working, if you need to verify a specific implementation,
+find all usages of a symbol, or ground your reasoning in actual code, call
+`query_code_context` for a precise symbol lookup or `hybrid_search_corpus` for a richer
+GraphRAG-backed search. These query the full indexed corpus through the same retrieval
+pipeline that grounded the skills themselves.
+
+**Report outcomes.** When a task completes (or fails), call `report_outcome` with the
+skill name and a brief note. This feeds the staleness tracking that keeps skills relevant.
+
+## Available skills
+
+{{ skill_hierarchy_summary }}
+
+## Corpus
+
+{{ corpus_summary }}
+
+## Citation rules
+
+- Cite every skill you used: `[skill: name]`.
+- Cite every code reference: `[file: path:line]`.
+- If `confidence < 0.7`, present the skill's guidance as a suggestion, not a fact.
+- If no applicable skill exists, query the corpus for evidence; never fabricate.
+- If retrieval returns `no_context`, ask the user to clarify rather than guessing.
