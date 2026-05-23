@@ -59,10 +59,10 @@ class CouncilHandles:
 async def council_handles(config: NexusConfig) -> AsyncIterator[CouncilHandles]:
     handles = CouncilHandles(
         retrieval=RetrievalContext.from_config(config),
-        chat_arch=ChatClient.from_cfg(config.models.council_agents, role="archaeologist"),
-        chat_domain=ChatClient.from_cfg(config.models.council_agents, role="domain_expert"),
-        chat_synth=ChatClient.from_cfg(config.models.synthesizer, role="synthesizer"),
-        chat_adv=ChatClient.from_cfg(config.models.adversary, role="adversary"),
+        chat_arch=ChatClient.from_cfg(config.models.council, role="archaeologist"),
+        chat_domain=ChatClient.from_cfg(config.models.council, role="domain_expert"),
+        chat_synth=ChatClient.from_cfg(config.models.council, role="synthesizer"),
+        chat_adv=ChatClient.from_cfg(config.models.council, role="adversary"),
     )
     try:
         yield handles

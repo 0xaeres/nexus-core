@@ -13,15 +13,11 @@ from pathlib import Path
 import pytest
 
 from nexus.config import (
-    CacheCfg,
-    CircuitBreakerCfg,
     EnrichCfg,
     IngestionCfg,
     ModelCfg,
     ModelsCfg,
     NexusConfig,
-    ObservabilityCfg,
-    RetrievalCfg,
     ServerCfg,
     StorageCfg,
     VectorStoreCfg,
@@ -32,29 +28,21 @@ from nexus.skills.models import Citation, SkillProposal
 
 
 def _make_cfg(tmp_path: Path) -> NexusConfig:
-    m = ModelCfg(provider="ollama", model="x")
+    m = ModelCfg(provider="deepinfra", model="x")
     return NexusConfig(
         skills_repo="git@example:repo.git",
         hierarchy_root=tmp_path / "skills",
         connectors=[],
         vector_store=VectorStoreCfg(url="http://127.0.0.1:1"),  # dead port
         models=ModelsCfg(
-            council_agents=m,
-            synthesizer=m,
-            adversary=m,
-            pr_review=m,
-            changelog=m,
-            curator=m,
+            council=m,
             light=m,
             embedding=ModelCfg(
                 provider="jina-local", model="j", url="http://127.0.0.1:1"
             ),
             reranker=ModelCfg(provider="jina-local", model="j", url="http://127.0.0.1:1"),
         ),
-        observability=ObservabilityCfg(),
-        cache=CacheCfg(),
         ingestion=IngestionCfg(enrich_chunks=EnrichCfg()),
-        retrieval=RetrievalCfg(circuit_breaker=CircuitBreakerCfg()),
         server=ServerCfg(),
         storage=StorageCfg(
             proposal_queue=tmp_path / "queue.db",

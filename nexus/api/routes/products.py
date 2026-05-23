@@ -153,40 +153,4 @@ async def create_product(
     return registry.get_product(id)
 
 
-@router.get("/products/{product_id}/settings")
-async def get_product_settings(
-    product_id: str,
-    registry: Registry = Depends(get_registry),
-) -> dict:
-    """Members + the model assignments visible to product admins."""
-    from nexus.config import get_config
 
-    p = registry.get_product(product_id)
-    if not p:
-        raise HTTPException(status_code=404, detail="product not found")
-    members = [
-        u for u in registry.list_users() if product_id in (u.get("products") or [])
-    ]
-    cfg = get_config()
-    models = {
-        "council_agents": cfg.models.council_agents.model_dump(exclude={"api_key"}),
-        "synthesizer": cfg.models.synthesizer.model_dump(exclude={"api_key"}),
-        "adversary": cfg.models.adversary.model_dump(exclude={"api_key"}),
-        "pr_review": cfg.models.pr_review.model_dump(exclude={"api_key"}),
-        "changelog": cfg.models.changelog.model_dump(exclude={"api_key"}),
-        "curator": cfg.models.curator.model_dump(exclude={"api_key"}),
-        "light": cfg.models.light.model_dump(exclude={"api_key"}),
-        "embedding": cfg.models.embedding.model_dump(exclude={"api_key"}),
-        "reranker": cfg.models.reranker.model_dump(exclude={"api_key"}),
-    }
-    return {"product": p, "members": members, "models": models}
-
-
-@router.get("/settings/org")
-async def get_org_settings(registry: Registry = Depends(get_registry)) -> dict:
-    """Org-wide: list all users + a billing placeholder."""
-    return {
-        "admins": [u for u in registry.list_users() if u.get("role") == "org_admin"],
-        "members": registry.list_users(),
-        "billing": {"placeholder": True},
-    }

@@ -40,18 +40,11 @@ class ConnectorCfg(BaseModel):
 class VectorCollectionsCfg(BaseModel):
     code: str = "nexus_code"
     text: str = "nexus_text"
-    cache: str = "nexus_cache"
 
 
 class VectorStoreCfg(BaseModel):
     url: str = "http://localhost:6333"
     collections: VectorCollectionsCfg = Field(default_factory=VectorCollectionsCfg)
-
-
-class GraphCfg(BaseModel):
-    url: str = "bolt://localhost:7687"
-    user: str = "neo4j"
-    password: str = "neo4j"
 
 
 class ModelCfg(BaseModel):
@@ -66,34 +59,10 @@ class ModelCfg(BaseModel):
 
 
 class ModelsCfg(BaseModel):
-    council_agents: ModelCfg
-    synthesizer: ModelCfg
-    adversary: ModelCfg
-    pr_review: ModelCfg
-    changelog: ModelCfg
-    curator: ModelCfg
-    light: ModelCfg
+    council: ModelCfg          # drafter + critic + reviser
+    light: ModelCfg            # enricher (HQE + doc context)
     embedding: ModelCfg
     reranker: ModelCfg
-    # Optional dedicated tier for the Assistant agent loop. Falls back to
-    # `council_agents` when unset, so existing nexus.yaml files keep working.
-    assistant: ModelCfg | None = None
-
-
-class LangfuseCfg(BaseModel):
-    enabled: bool = True
-    host: str = "http://localhost:3001"
-    public_key: str = ""
-    secret_key: str = ""
-
-
-class ObservabilityCfg(BaseModel):
-    langfuse: LangfuseCfg = Field(default_factory=LangfuseCfg)
-
-
-class CacheCfg(BaseModel):
-    semantic_threshold: float = 0.92
-    ttl_hours: int = 24
 
 
 class EnrichCfg(BaseModel):
@@ -101,14 +70,8 @@ class EnrichCfg(BaseModel):
     code: bool = True   # HQE: 3 hypothetical questions bridge code → natural language queries
 
 
-class ExtractRelationsCfg(BaseModel):
-    docs: bool = True
-    code: bool = False
-
-
 class IngestionCfg(BaseModel):
     enrich_chunks: EnrichCfg = Field(default_factory=EnrichCfg)
-    extract_relations: ExtractRelationsCfg = Field(default_factory=ExtractRelationsCfg)
     embed_batch_size: int = 16          # M2/8GB: 16 | upgrade 16GB+: 32
     quality_gate_threshold: float = 0.3
     file_batch_size: int = 20           # M2/8GB: 20 | upgrade 16GB+: 50
@@ -116,46 +79,9 @@ class IngestionCfg(BaseModel):
     enricher_concurrency: int = 4       # cloud inference — rate-limited, not RAM-limited
 
 
-class CircuitBreakerCfg(BaseModel):
-    failure_threshold: int = 3
-    recovery_timeout_s: int = 30
-
-
-class RetrievalCfg(BaseModel):
-    hyde_enabled: bool = True
-    simple_query_threshold: float = 0.8
-    circuit_breaker: CircuitBreakerCfg = Field(default_factory=CircuitBreakerCfg)
-
-
-class AtlassianCfg(BaseModel):
-    """Atlassian Rovo MCP Server connection + per-user OAuth — see
-    docs/ASSISTANT-LAYER.md §5-6. Optional: when `enabled` is false the Assistant
-    falls back to the stub connector."""
-
-    enabled: bool = False
-    client_id: str = ""
-    client_secret: str = ""
-    redirect_uri: str = "http://localhost:8000/auth/atlassian/callback"
-    mcp_url: str = "https://mcp.atlassian.com/v1/mcp"
-    authorize_url: str = "https://auth.atlassian.com/authorize"
-    token_url: str = "https://auth.atlassian.com/oauth/token"
-    # UI page to return to after the OAuth callback completes.
-    post_auth_redirect: str = "http://localhost:3000/settings/org"
-    scopes: list[str] = Field(
-        default_factory=lambda: [
-            "read:jira-work",
-            "write:jira-work",
-            "read:confluence-content.all",
-            "write:confluence-content",
-            "offline_access",
-        ]
-    )
-
-
 class ServerCfg(BaseModel):
     host: str = "0.0.0.0"
     port: int = 8000
-    webhook_secret: str = ""
 
 
 class StorageCfg(BaseModel):
@@ -178,15 +104,10 @@ class NexusConfig(BaseSettings):
 
     connectors: list[ConnectorCfg] = Field(default_factory=list)
     vector_store: VectorStoreCfg = Field(default_factory=VectorStoreCfg)
-    graph: GraphCfg = Field(default_factory=GraphCfg)
     models: ModelsCfg
-    observability: ObservabilityCfg = Field(default_factory=ObservabilityCfg)
-    cache: CacheCfg = Field(default_factory=CacheCfg)
     ingestion: IngestionCfg = Field(default_factory=IngestionCfg)
-    retrieval: RetrievalCfg = Field(default_factory=RetrievalCfg)
     server: ServerCfg = Field(default_factory=ServerCfg)
     storage: StorageCfg = Field(default_factory=StorageCfg)
-    atlassian: AtlassianCfg = Field(default_factory=AtlassianCfg)
 
     @classmethod
     def load(cls, path: str | Path = "nexus.yaml") -> NexusConfig:

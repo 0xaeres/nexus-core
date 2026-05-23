@@ -3,10 +3,9 @@
 Launched by an MCP client (e.g. Claude Desktop) as a subprocess. Each request
 is served against a single product configured at launch:
 
-  uv run python -m nexus.mcp_server.server --product <your-product-id> --user <user-id>
+  uv run python -m nexus.mcp_server.server --product <your-product-id>
 
-Exposes the skill/corpus tools + resources from ENGINEERING.md §8, plus the
-Assistant tools (Jira/Confluence query + action) from docs/ASSISTANT-LAYER.md §11.
+Exposes the skill + corpus tools from ENGINEERING.md §8.
 """
 
 from __future__ import annotations
@@ -25,23 +24,14 @@ from mcp.server.stdio import stdio_server
 from mcp.types import Resource, TextContent, Tool
 
 from nexus.config import NexusConfig
-from nexus.mcp_server import assistant_tools as nx_assistant
 from nexus.mcp_server import tools as nx_tools
 
 log = logging.getLogger("nexus.mcp_server")
 
 
-# ---------------------------------------------------------------- factory
-
-
-def _build_server(*, product: str, user: str, config: NexusConfig) -> Server:
+def _build_server(*, product: str, config: NexusConfig) -> Server:
     server: Server = Server("nexus")
     state = nx_tools.ToolState(product=product, config=config)
-    assistant_state = nx_assistant.AssistantToolState(
-        product=product, user=user, config=config
-    )
-
-    # ---- tool registry ----
 
     @server.list_tools()
     async def list_tools() -> list[Tool]:
@@ -53,40 +43,15 @@ def _build_server(*, product: str, user: str, config: NexusConfig) -> Server:
                     "names, kinds, confidence, and one-line summaries. Always call this "
                     "first when starting a new task. Pass `current_file` and/or "
                     "`context` to hard-filter by skill applicability and keep the "
-                    "response tight; prerequisites declared via composes_with are "
-                    "included automatically and tagged `included_as=prerequisite`."
+                    "response tight."
                 ),
                 inputSchema={
                     "type": "object",
                     "properties": {
                         "query": {"type": "string"},
-                        "context": {
-                            "type": "string",
-                            "default": "general",
-                            "description": (
-                                "Task tag — e.g. 'code-review', 'security-audit', "
-                                "'pull-request'. Skills with a non-empty "
-                                "applies_to.contexts list are kept only when this "
-                                "tag is in that list. 'general' disables the filter."
-                            ),
-                        },
-                        "current_file": {
-                            "type": "string",
-                            "description": (
-                                "Path of the file the agent is currently working on. "
-                                "Skills with a non-empty applies_to.files list are "
-                                "kept only when this path matches one of those globs."
-                            ),
-                        },
-                        "top_k": {
-                            "type": "integer",
-                            "default": 5,
-                            "description": (
-                                "Direct matches to return before composes_with "
-                                "expansion. Final list may be larger due to "
-                                "prerequisite chains."
-                            ),
-                        },
+                        "context": {"type": "string", "default": "general"},
+                        "current_file": {"type": "string"},
+                        "top_k": {"type": "integer", "default": 5},
                     },
                     "required": ["query"],
                 },
@@ -104,9 +69,7 @@ def _build_server(*, product: str, user: str, config: NexusConfig) -> Server:
             ),
             Tool(
                 name="report_outcome",
-                description=(
-                    "Tell Nexus whether a skill helped. Feeds staleness tracking."
-                ),
+                description="Tell Nexus whether a skill helped. Feeds staleness tracking.",
                 inputSchema={
                     "type": "object",
                     "properties": {
@@ -135,8 +98,8 @@ def _build_server(*, product: str, user: str, config: NexusConfig) -> Server:
             Tool(
                 name="hybrid_search_corpus",
                 description=(
-                    "Full 5-stage GraphRAG retrieval against the raw corpus. Use when "
-                    "symbol lookup is too narrow or you need cross-source context."
+                    "Hybrid retrieval (dense + BM25 + rerank) against the raw corpus. "
+                    "Use when symbol lookup is too narrow or you need cross-source context."
                 ),
                 inputSchema={
                     "type": "object",
@@ -148,77 +111,10 @@ def _build_server(*, product: str, user: str, config: NexusConfig) -> Server:
                     "required": ["query"],
                 },
             ),
-            # ---- Assistant layer (docs/ASSISTANT-LAYER.md §11) ----
-            Tool(
-                name="assistant_ask",
-                description=(
-                    "Ask the Nexus Assistant a question about this product's Jira, "
-                    "Confluence, or codebase. It may also DRAFT (never apply) "
-                    "Jira/Confluence changes — returned as an action_proposal you "
-                    "must surface to your user and confirm via assistant_confirm_action."
-                ),
-                inputSchema={
-                    "type": "object",
-                    "properties": {
-                        "query": {"type": "string"},
-                        "conversation_id": {"type": "string"},
-                    },
-                    "required": ["query"],
-                },
-            ),
-            Tool(
-                name="assistant_get_jira_issue",
-                description="Fetch a single Jira issue by key (e.g. PROJ-123).",
-                inputSchema={
-                    "type": "object",
-                    "properties": {"key": {"type": "string"}},
-                    "required": ["key"],
-                },
-            ),
-            Tool(
-                name="assistant_search_confluence",
-                description="Search Confluence pages, optionally scoped to a space key.",
-                inputSchema={
-                    "type": "object",
-                    "properties": {
-                        "query": {"type": "string"},
-                        "space": {"type": "string"},
-                    },
-                    "required": ["query"],
-                },
-            ),
-            Tool(
-                name="assistant_list_actions",
-                description=(
-                    "List drafted action proposals (subtask/transition/comment/page "
-                    "changes) awaiting confirmation."
-                ),
-                inputSchema={
-                    "type": "object",
-                    "properties": {
-                        "status": {"type": "string", "default": "pending"}
-                    },
-                },
-            ),
-            Tool(
-                name="assistant_confirm_action",
-                description=(
-                    "Execute a drafted action proposal. THIS PERFORMS WRITES to "
-                    "Jira/Confluence — only call it after your user has reviewed and "
-                    "approved the proposal's preview."
-                ),
-                inputSchema={
-                    "type": "object",
-                    "properties": {"proposal_id": {"type": "string"}},
-                    "required": ["proposal_id"],
-                },
-            ),
         ]
 
     @server.call_tool()
-    async def call_tool(
-        name: str, arguments: dict | None
-    ) -> list[TextContent]:
+    async def call_tool(name: str, arguments: dict | None) -> list[TextContent]:
         args = arguments or {}
         try:
             if name == "find_skills":
@@ -231,32 +127,12 @@ def _build_server(*, product: str, user: str, config: NexusConfig) -> Server:
                 payload = await nx_tools.query_code_context(state, **args)
             elif name == "hybrid_search_corpus":
                 payload = await nx_tools.hybrid_search_corpus(state, **args)
-            elif name == "assistant_ask":
-                payload = await nx_assistant.assistant_ask(assistant_state, **args)
-            elif name == "assistant_get_jira_issue":
-                payload = await nx_assistant.assistant_get_jira_issue(
-                    assistant_state, **args
-                )
-            elif name == "assistant_search_confluence":
-                payload = await nx_assistant.assistant_search_confluence(
-                    assistant_state, **args
-                )
-            elif name == "assistant_list_actions":
-                payload = await nx_assistant.assistant_list_actions(
-                    assistant_state, **args
-                )
-            elif name == "assistant_confirm_action":
-                payload = await nx_assistant.assistant_confirm_action(
-                    assistant_state, **args
-                )
             else:
                 payload = {"error": f"unknown tool: {name}"}
         except Exception as e:
             log.exception("tool %s failed", name)
             payload = {"error": str(e)}
         return [TextContent(type="text", text=json.dumps(payload, indent=2))]
-
-    # ---- resource registry ----
 
     @server.list_resources()
     async def list_resources() -> list[Resource]:
@@ -276,7 +152,7 @@ def _build_server(*, product: str, user: str, config: NexusConfig) -> Server:
             Resource(
                 uri=f"nexus://corpus/{product}",
                 name=f"Corpus summary — {product}",
-                description="Source/chunk/graph counts and last indexed.",
+                description="Source/chunk counts and last indexed.",
                 mimeType="application/json",
             ),
         ]
@@ -300,9 +176,6 @@ def _build_server(*, product: str, user: str, config: NexusConfig) -> Server:
     return server
 
 
-# ---------------------------------------------------------------- meta-skill render
-
-
 async def _render_meta_skill(state: nx_tools.ToolState) -> str:
     template_path = Path(__file__).parent / "meta_skill.md.j2"
     template = Template(template_path.read_text(encoding="utf-8"))
@@ -323,24 +196,13 @@ async def _render_meta_skill(state: nx_tools.ToolState) -> str:
     )
 
 
-# ---------------------------------------------------------------- entry
-
-
 def _parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Nexus MCP server (stdio).")
     p.add_argument(
         "--product",
         default=os.environ.get("NEXUS_PRODUCT"),
         required=not os.environ.get("NEXUS_PRODUCT"),
-        help="Product ID to serve (required). Set via --product or NEXUS_PRODUCT env var.",
-    )
-    p.add_argument(
-        "--user",
-        default=os.environ.get("NEXUS_USER", "admin"),
-        help=(
-            "User identity for the assistant_* tools — drives per-user OAuth "
-            "attribution. Set via --user or NEXUS_USER env var."
-        ),
+        help="Product ID to serve. Set via --product or NEXUS_PRODUCT env var.",
     )
     p.add_argument(
         "--config",
@@ -353,7 +215,7 @@ def _parse_args() -> argparse.Namespace:
 async def amain() -> None:
     args = _parse_args()
     config = NexusConfig.load(args.config)
-    server = _build_server(product=args.product, user=args.user, config=config)
+    server = _build_server(product=args.product, config=config)
     async with stdio_server() as (read, write):
         await server.run(read, write, server.create_initialization_options())
 

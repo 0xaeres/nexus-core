@@ -17,13 +17,10 @@ from pathlib import Path
 
 from nexus.config import NexusConfig
 from nexus.connectors.manager import ConnectorManager
-from nexus.graph.store import GraphStore
 from nexus.ingest.embedder import EmbedderClient
 from nexus.ingest.enricher import ContextualEnricher
 from nexus.ingest.incremental import reindex_resource
 from nexus.ingest.indexer import Indexer
-from nexus.ingest.relation_extractor import RelationExtractor
-from nexus.retrieval.cache import SemanticCache
 
 log = logging.getLogger(__name__)
 
@@ -49,34 +46,14 @@ async def run_daemon(
             concurrency=config.ingestion.enricher_concurrency,
         )
         indexer = Indexer(url=config.vector_store.url)
-        cache = SemanticCache(
-            client=indexer.client,
-            threshold=config.cache.semantic_threshold,
-            ttl_s=config.cache.ttl_hours * 3600,
-        )
-        graph = GraphStore(
-            url=config.graph.url,
-            user=config.graph.user,
-            password=config.graph.password,
-        )
-        extractor = RelationExtractor(
-            base_url=config.models.light.base_url or "https://api.deepinfra.com/v1/openai",
-            model=config.models.light.model,
-            api_key=config.models.light.api_key,
-            extract_docs=config.ingestion.extract_relations.docs,
-            extract_code=config.ingestion.extract_relations.code,
-        )
         manager = ConnectorManager(config)
 
         stack.push_async_callback(embedder.aclose)
         stack.push_async_callback(enricher.aclose)
-        stack.push_async_callback(extractor.aclose)
         stack.push_async_callback(indexer.aclose)
-        stack.push_async_callback(graph.aclose)
         stack.push_async_callback(manager.stop)
 
         await indexer.ensure_collections()
-        await graph.ensure_constraints()
         await manager.start()
 
         if bootstrap:
@@ -86,9 +63,6 @@ async def run_daemon(
                 embedder=embedder,
                 enricher=enricher,
                 indexer=indexer,
-                cache=cache,
-                graph=graph,
-                extractor=extractor,
                 enrich=True,
             )
 
@@ -107,16 +81,10 @@ async def run_daemon(
                     embedder=embedder,
                     enricher=enricher,
                     indexer=indexer,
-                    cache=cache,
-                    graph=graph,
-                    relation_extractor=extractor,
                 )
                 log.info("daemon: reindexed %s", event.resource.uri)
             except Exception as e:
                 log.exception("daemon: reindex failed for %s: %s", event.resource.uri, e)
-
-
-# ---------------------------------------------------------------- helpers
 
 
 async def _bootstrap_sync(
@@ -126,9 +94,6 @@ async def _bootstrap_sync(
     embedder: EmbedderClient,
     enricher: ContextualEnricher,
     indexer: Indexer,
-    cache: SemanticCache,
-    graph: GraphStore | None = None,
-    extractor: RelationExtractor | None = None,
     enrich: bool,
 ) -> None:
     log.info("daemon: bootstrap sync (product=%s)", product_id)
@@ -148,9 +113,6 @@ async def _bootstrap_sync(
                 embedder=embedder,
                 enricher=enricher,
                 indexer=indexer,
-                cache=cache,
-                graph=graph,
-                relation_extractor=extractor,
                 enrich=enrich,
             )
             count += 1

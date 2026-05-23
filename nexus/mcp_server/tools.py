@@ -171,7 +171,6 @@ async def query_code_context(
         query=symbol,
         top_k=10,
         mode="code",
-        context_hint=f"symbol;glob={file_glob}",
     )
     return _render_retrieval(result)
 
@@ -183,7 +182,7 @@ async def hybrid_search_corpus(
     product_id: str | None = None,
     top_k: int = 5,
 ) -> dict:
-    """Full GraphRAG retrieval against the indexed corpus."""
+    """Hybrid retrieval (dense + BM25 + rerank) against the indexed corpus."""
     pid = product_id or state.product
     result = await retrieve(
         ctx=state.ctx, product_id=pid, query=query, top_k=top_k, mode="auto"
@@ -231,8 +230,7 @@ async def corpus_summary(state: ToolState, *, product_id: str) -> dict:
         "chunk_count": code_count + text_count,
         "code_chunk_count": code_count,
         "doc_chunk_count": text_count,
-        "source_count": 0,  # populated when the source registry lands (Slice 4)
-        "graph_node_count": 0,  # populated when Neo4j is wired in Slice 6
+        "source_count": 0,  # populated when the source registry lands
     }
 
 
@@ -322,14 +320,7 @@ def _serialise_full(s: Skill | OrgSkill) -> dict:
 
 def _render_retrieval(result) -> dict:
     return {
-        "mode": result.mode,
-        "cache_hit": result.cache_hit,
-        "used_hyde": result.used_hyde,
-        "degraded_components": result.degraded_components,
-        "classifier": {
-            "complexity": result.classifier_complexity,
-            "reason": result.classifier_reason,
-        },
+        "reranked": result.reranked,
         "hits": [
             {
                 "score": h.score,

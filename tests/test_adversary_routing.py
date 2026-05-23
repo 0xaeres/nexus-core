@@ -3,15 +3,11 @@
 from langgraph.graph import END
 
 from nexus.config import (
-    CacheCfg,
-    CircuitBreakerCfg,
     EnrichCfg,
     IngestionCfg,
     ModelCfg,
     ModelsCfg,
     NexusConfig,
-    ObservabilityCfg,
-    RetrievalCfg,
     ServerCfg,
     StorageCfg,
     VectorStoreCfg,
@@ -22,26 +18,18 @@ from nexus.skills.models import Critique
 
 
 def _make_cfg() -> NexusConfig:
-    m = ModelCfg(provider="ollama", model="x")
+    m = ModelCfg(provider="deepinfra", model="x")
     return NexusConfig(
         skills_repo="git@example:repo.git",
         connectors=[],
         vector_store=VectorStoreCfg(),
         models=ModelsCfg(
-            council_agents=m,
-            synthesizer=m,
-            adversary=m,
-            pr_review=m,
-            changelog=m,
-            curator=m,
+            council=m,
             light=m,
             embedding=ModelCfg(provider="jina-local", model="j", url="http://x"),
             reranker=ModelCfg(provider="jina-local", model="j", url="http://x"),
         ),
-        observability=ObservabilityCfg(),
-        cache=CacheCfg(),
         ingestion=IngestionCfg(enrich_chunks=EnrichCfg()),
-        retrieval=RetrievalCfg(circuit_breaker=CircuitBreakerCfg()),
         server=ServerCfg(),
         storage=StorageCfg(),
     )
