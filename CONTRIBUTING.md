@@ -247,11 +247,15 @@ This ordering prevents knowledge-base poisoning:
    - Publishes `session_start` event on `HUB`.
    - `initial_state(...)` builds the TypedDict.
    - Enters `council_handles(config)` context (retrieval + 3 chat clients).
+     By default Drafter, Critic, and Reviser all use `models.council`; optional
+     `models.drafter`, `models.critic`, and `models.reviser` override per role.
    - Compiles `build_graph()` with the SQLite checkpointer.
    - `compiled.astream(initial, ...)` — for each yielded node update:
      `_publish_node_delta(...)` translates state deltas into SSE events
      (`message`, `cost`, `critique`, `proposal_preview`).
    - On completion: `queue.enqueue(proposal, ...)` + `queue.record_session(...)`.
+   - On any node exception: the run is recorded as `failed`, an `error` event
+     is streamed, and no proposal is enqueued. Council is all-or-none.
 4. UI's `CouncilSession.tsx` consumes `sessionStreamUrl(sid)` via SSE:
    - Live mode while running; deterministic replay after completion
      (see `council.py::session_stream`).

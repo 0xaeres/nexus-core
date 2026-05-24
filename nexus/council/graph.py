@@ -25,6 +25,7 @@ from langgraph.graph import END, START, StateGraph
 
 from nexus.config import NexusConfig
 from nexus.council.agents import critic, drafter, reviser
+from nexus.council.errors import CouncilAgentError
 from nexus.council.state import CouncilState
 from nexus.llm.client import ChatClient
 from nexus.retrieval.pipeline import RetrievalContext
@@ -48,11 +49,23 @@ class CouncilHandles:
 
 @asynccontextmanager
 async def council_handles(config: NexusConfig) -> AsyncIterator[CouncilHandles]:
+    drafter_cfg = config.models.drafter or config.models.council
+    critic_cfg = config.models.critic or config.models.council
+    reviser_cfg = config.models.reviser or config.models.council
+    log.info(
+        "council models: drafter=%s/%s critic=%s/%s reviser=%s/%s",
+        drafter_cfg.provider,
+        drafter_cfg.model,
+        critic_cfg.provider,
+        critic_cfg.model,
+        reviser_cfg.provider,
+        reviser_cfg.model,
+    )
     handles = CouncilHandles(
         retrieval=RetrievalContext.from_config(config),
-        chat_drafter=ChatClient.from_cfg(config.models.council, role="drafter"),
-        chat_critic=ChatClient.from_cfg(config.models.council, role="critic"),
-        chat_reviser=ChatClient.from_cfg(config.models.council, role="reviser"),
+        chat_drafter=ChatClient.from_cfg(drafter_cfg, role="drafter"),
+        chat_critic=ChatClient.from_cfg(critic_cfg, role="critic"),
+        chat_reviser=ChatClient.from_cfg(reviser_cfg, role="reviser"),
     )
     try:
         yield handles
@@ -64,17 +77,26 @@ def build_graph(config: NexusConfig, handles: CouncilHandles):
     """StateGraph: START -> Drafter -> Critic -> route(blocking?) -> {Reviser, END}."""
 
     async def drafter_node(state: CouncilState) -> dict:
-        return await drafter.run(
-            state, config=config, retrieval=handles.retrieval, chat=handles.chat_drafter
-        )
+        try:
+            return await drafter.run(
+                state, config=config, retrieval=handles.retrieval, chat=handles.chat_drafter
+            )
+        except Exception as e:
+            raise CouncilAgentError("drafter", e) from e
 
     async def critic_node(state: CouncilState) -> dict:
-        return await critic.run(
-            state, config=config, retrieval=handles.retrieval, chat=handles.chat_critic
-        )
+        try:
+            return await critic.run(
+                state, config=config, retrieval=handles.retrieval, chat=handles.chat_critic
+            )
+        except Exception as e:
+            raise CouncilAgentError("critic", e) from e
 
     async def reviser_node(state: CouncilState) -> dict:
-        return await reviser.run(state, config=config, chat=handles.chat_reviser)
+        try:
+            return await reviser.run(state, config=config, chat=handles.chat_reviser)
+        except Exception as e:
+            raise CouncilAgentError("reviser", e) from e
 
     def _route_after_critic(state: CouncilState) -> str:
         crit = state.get("critique")

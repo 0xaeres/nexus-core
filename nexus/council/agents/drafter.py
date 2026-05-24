@@ -116,7 +116,7 @@ async def run(
     evidence = hits_to_evidence(result.hits, limit=20)
 
     if not evidence:
-        return _empty_update(topic, chat.model)
+        raise RuntimeError("no evidence retrieved; ingest source content before running council")
 
     repo_map = load_repo_map_for_product(config, product_id)
     repo_map_block = repo_map.render(bias_terms=topic_bias_terms(topic), token_budget=500)
@@ -242,40 +242,6 @@ def _merge_section_fill(current: str, fill: str) -> str:
     if not fill:
         return current
     return current.rstrip() + "\n\n" + fill + "\n"
-
-
-def _empty_update(topic: str, model: str) -> dict:
-    parsed = parse_skill_markdown(
-        f"# {topic}\n\n(no evidence)", fallback_name=topic
-    )
-    proposal = SkillProposal(
-        id=str(uuid.uuid4()),
-        name=parsed.name,
-        body=(
-            "# (no proposal)\n\n"
-            "The council could not gather enough evidence to draft a skill. "
-            "Run an ingest against the relevant sources and try again."
-        ),
-        citations=[],
-        confidence=0.0,
-        status="pending",
-        created_at=datetime.now(UTC).isoformat(),
-    )
-    return {
-        "evidence": [],
-        "proposal": proposal,
-        "proposal_id": proposal.id,
-        "revision_count": 0,
-        "critique": None,
-        "deliberation": [
-            DeliberationMessage(
-                agent="drafter",
-                timestamp=datetime.now(UTC).isoformat(),
-                body="No evidence retrieved — empty placeholder proposal.",
-            )
-        ],
-        "costs": [AgentCost(agent="drafter", model=model)],
-    }
 
 
 # silence unused import in this module

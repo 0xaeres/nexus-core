@@ -60,6 +60,9 @@ class ModelCfg(BaseModel):
 
 class ModelsCfg(BaseModel):
     council: ModelCfg          # drafter + critic + reviser
+    drafter: ModelCfg | None = None
+    critic: ModelCfg | None = None
+    reviser: ModelCfg | None = None
     light: ModelCfg            # enricher (HQE + doc context)
     embedding: ModelCfg
     reranker: ModelCfg

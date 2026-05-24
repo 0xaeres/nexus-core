@@ -603,6 +603,7 @@ models:
     model: Qwen/Qwen3-Max-Thinking
     api_key: ${DEEPINFRA_API_KEY}
     base_url: https://api.deepinfra.com/v1/openai
+  # Optional: drafter / critic / reviser override council per role.
   light:                       # enricher (HQE + Anthropic CR)
     provider: deepinfra
     model: google/gemma-3-4b-it

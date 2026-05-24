@@ -128,6 +128,8 @@ async def _run_session(
     topic: str,
 ) -> None:
     started_at = datetime.now(UTC).isoformat()
+    deliberation_dumped: list[dict] = []
+    costs_dumped: list[dict] = []
     try:
         await HUB.publish(
             session_id,
@@ -146,8 +148,6 @@ async def _run_session(
             topic=topic,
             config_path="nexus.yaml",
         )
-        deliberation_dumped: list[dict] = []
-        costs_dumped: list[dict] = []
         proposal = None
 
         async with (
@@ -208,7 +208,31 @@ async def _run_session(
             await HUB.publish(session_id, {"event": "error", "data": "no proposal produced"})
     except Exception as e:  # pragma: no cover - defensive
         log.exception("council session %s crashed", session_id)
-        await HUB.publish(session_id, {"event": "error", "data": str(e)})
+        failed_at = datetime.now(UTC).isoformat()
+        failure = _failure_message(error=e, timestamp=failed_at)
+        deliberation_dumped.append(failure)
+        queue.record_session(
+            session_id=session_id,
+            product_id=product_id,
+            topic=topic,
+            proposal_id=None,
+            deliberation=deliberation_dumped,
+            costs=costs_dumped,
+            started_at=started_at,
+            completed_at=failed_at,
+            status="failed",
+        )
+        await HUB.publish(session_id, {"event": "message", "data": failure})
+        await HUB.publish(
+            session_id,
+            {
+                "event": "error",
+                "data": {
+                    "message": str(e),
+                    "type": type(e).__name__,
+                },
+            },
+        )
     finally:
         await HUB.publish(session_id, {"event": "session_end", "data": {}})
         await HUB.finish(session_id)
@@ -250,6 +274,15 @@ def _dump(obj) -> dict:
     if isinstance(obj, dict):
         return obj
     return {"value": str(obj)}
+
+
+def _failure_message(*, error: Exception, timestamp: str) -> dict:
+    return {
+        "agent": "system",
+        "timestamp": timestamp,
+        "body": f"Council failed: {type(error).__name__}: {error}",
+        "cite_ids": [],
+    }
 
 
 # ---------------------------------------------------------------- consumer

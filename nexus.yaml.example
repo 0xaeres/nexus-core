@@ -33,6 +33,23 @@ models:
     api_key: ${DEEPINFRA_API_KEY}
     base_url: https://api.deepinfra.com/v1/openai
 
+  # Optional role-specific overrides. Omit to use models.council for all three.
+  # drafter:
+  #   provider: deepinfra
+  #   model: Qwen/Qwen3-Max-Thinking
+  #   api_key: ${DEEPINFRA_API_KEY}
+  #   base_url: https://api.deepinfra.com/v1/openai
+  # critic:
+  #   provider: deepinfra
+  #   model: Qwen/Qwen3-Max-Thinking
+  #   api_key: ${DEEPINFRA_API_KEY}
+  #   base_url: https://api.deepinfra.com/v1/openai
+  # reviser:
+  #   provider: deepinfra
+  #   model: Qwen/Qwen3-Max-Thinking
+  #   api_key: ${DEEPINFRA_API_KEY}
+  #   base_url: https://api.deepinfra.com/v1/openai
+
   light:
     provider: deepinfra
     model: google/gemma-3-4b-it
