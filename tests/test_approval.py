@@ -65,7 +65,6 @@ def _seed_proposal(queue: ProposalQueue) -> SkillProposal:
         p,
         session_id="cs_seed",
         product_id="forge",
-        skill_kind="product_domain",
     )
     return p
 
@@ -81,8 +80,8 @@ def test_approve_writes_skill_file_and_flips_status(tmp_path: Path) -> None:
         )
     )
     assert result["ok"] is True
-    # Skill file landed on disk under hierarchy_root
-    expected = tmp_path / "skills" / "L2_domain" / "demo-skill.skill.md"
+    # Skill file landed on disk under hierarchy_root (flat: <product>/<name>.skill.md)
+    expected = tmp_path / "skills" / "forge" / "demo-skill.skill.md"
     assert expected.exists()
     contents = expected.read_text(encoding="utf-8")
     assert "## Rules" in contents

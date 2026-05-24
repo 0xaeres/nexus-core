@@ -12,15 +12,7 @@ from nexus.api.app import app
 from nexus.api.deps import get_proposal_queue, get_registry, get_skill_store
 from nexus.council.queue import ProposalQueue
 from nexus.registry import Registry
-from nexus.skills.models import (
-    AppliesTo,
-    Citation,
-    Provenance,
-    Skill,
-    SkillKind,
-    SkillProposal,
-    SkillScope,
-)
+from nexus.skills.models import AppliesTo, Citation, Provenance, Skill, SkillProposal
 from nexus.skills.store import SkillStore
 
 
@@ -72,20 +64,17 @@ def _pending_proposal() -> SkillProposal:
     )
 
 
-def _master_skill(product_id: str) -> Skill:
+def _demo_skill(product_id: str) -> Skill:
     return Skill(
-        name=product_id,
-        kind=SkillKind.MASTER,
-        scope=SkillScope.PRODUCT,
+        name="demo-overview",
         product=product_id,
         confidence=0.8,
         applies_to=AppliesTo(),
-        composes_with=[],
         provenance=Provenance(
             validated_by="jl",
             validated_at=datetime.now(UTC).isoformat(),
         ),
-        body="# Demo master\n",
+        body="# Demo\n",
     )
 
 
@@ -138,7 +127,6 @@ def test_status_council_in_progress_flag(client) -> None:
     queue.record_session(
         session_id="cs_live",
         product_id="demo",
-        skill_kind="master",
         topic="overview",
         proposal_id=None,
         deliberation=[],
@@ -150,28 +138,21 @@ def test_status_council_in_progress_flag(client) -> None:
     body = c.get("/products/demo/status").json()
     assert body["councilInProgress"] is True
     assert body["currentSessionId"] == "cs_live"
-    # Live session does not advance the stage past "council".
     assert body["currentStage"] == "council"
 
 
 def test_status_stage_review_when_pending_proposal(client) -> None:
     c, registry, queue, _ = client
     _add_synced_source(registry, "demo")
-    queue.enqueue(
-        _pending_proposal(),
-        session_id="cs_done",
-        product_id="demo",
-        skill_kind="master",
-    )
+    queue.enqueue(_pending_proposal(), session_id="cs_done", product_id="demo")
     body = c.get("/products/demo/status").json()
     assert body["currentStage"] == "review"
 
 
-def test_status_stage_skill_when_master_exists(client) -> None:
+def test_status_stage_skill_when_approved_exists(client) -> None:
     c, registry, _, store = client
     _add_synced_source(registry, "demo")
-    skill = _master_skill("demo")
-    store.save(skill, SkillStore.relative_path_for(skill))
+    store.save(_demo_skill("demo"))
     body = c.get("/products/demo/status").json()
     assert body["currentStage"] == "skill"
     assert body["hasSkill"] is True

@@ -9,7 +9,6 @@ from fastapi import APIRouter, Body, Depends, HTTPException
 from nexus.api.deps import get_proposal_queue, get_registry, get_skill_store
 from nexus.council.queue import ProposalQueue
 from nexus.registry import Registry
-from nexus.skills.models import OrgSkill, Skill, SkillKind
 from nexus.skills.store import SkillStore
 
 router = APIRouter(tags=["products"])
@@ -43,11 +42,7 @@ async def list_products(
     enriched: list[dict] = []
     for p in products:
         sessions = queue.list_sessions(product_id=p["id"])
-        skills_count = sum(
-            1
-            for s in store.iter_skills()
-            if not isinstance(s, OrgSkill) and (s.product == p["id"])
-        )
+        skills_count = sum(1 for s in store.iter_skills() if s.product == p["id"])
         enriched.append(
             {
                 **p,
@@ -95,10 +90,7 @@ async def get_product_status(
         s.get("lastSync") and int(s.get("resourceCount") or 0) > 0 for s in sources
     )
 
-    has_master = any(
-        isinstance(s, Skill) and s.product == product_id and s.kind is SkillKind.MASTER
-        for s in store.iter_skills()
-    )
+    has_skill = any(s.product == product_id for s in store.iter_skills())
 
     pending = queue.list(status="pending", product_id=product_id)
     has_pending = bool(pending)
@@ -109,7 +101,7 @@ async def get_product_status(
         None,
     )
 
-    if has_master:
+    if has_skill:
         stage = "skill"
     elif has_pending:
         stage = "review"
@@ -122,7 +114,7 @@ async def get_product_status(
 
     return {
         "hasEmbeddings": has_embeddings,
-        "hasSkill": has_master,
+        "hasSkill": has_skill,
         "councilInProgress": live is not None,
         "currentSessionId": (live["id"] if live else None),
         "currentStage": stage,
@@ -148,7 +140,6 @@ async def create_product(
         "tagline": tagline,
         "owner": owner,
         "onboardedAt": datetime.now(UTC).isoformat(),
-        "masterSkillId": id,
     })
     return registry.get_product(id)
 

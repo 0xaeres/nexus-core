@@ -27,17 +27,12 @@ async def list_sessions(
 async def create_session(
     product_id: str,
     topic: str = Body(..., embed=True),
-    skill_kind: str = Body("product_domain", embed=True),
     queue: ProposalQueue = Depends(get_proposal_queue),
     config: NexusConfig = Depends(get_config_dep),
 ) -> dict:
     """Schedule a council run as a background task. Returns the session_id."""
     sid = await kick_off(
-        config=config,
-        queue=queue,
-        product_id=product_id,
-        topic=topic,
-        skill_kind=skill_kind,
+        config=config, queue=queue, product_id=product_id, topic=topic
     )
     return {"session_id": sid, "status": "running"}
 
@@ -71,7 +66,6 @@ async def session_stream(
                 {
                     "session_id": session_id,
                     "topic": sess.get("topic"),
-                    "skill_kind": sess.get("skill_kind"),
                     "replay": True,
                 }
             ),

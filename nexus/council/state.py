@@ -8,7 +8,7 @@ from clobbering each other.
 from __future__ import annotations
 
 import operator
-from typing import Annotated, Literal, TypedDict
+from typing import Annotated, TypedDict
 
 from pydantic import BaseModel, Field
 
@@ -42,7 +42,6 @@ class CouncilState(TypedDict, total=False):
     session_id: str
     product_id: str
     topic: str
-    skill_kind: Literal["master", "product_domain"]  # passthrough; collapses in next commit
     config_path: str
 
     # Shared evidence — populated by Drafter; Critic adds its own re-retrieval to it.
@@ -64,14 +63,12 @@ def initial_state(
     session_id: str,
     product_id: str,
     topic: str,
-    skill_kind: str,
     config_path: str,
 ) -> CouncilState:
     return {
         "session_id": session_id,
         "product_id": product_id,
         "topic": topic,
-        "skill_kind": skill_kind,  # type: ignore[typeddict-item]
         "config_path": config_path,
         "evidence": [],
         "proposal": None,

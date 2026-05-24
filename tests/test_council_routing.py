@@ -66,7 +66,6 @@ def test_initial_state_revision_zero() -> None:
         session_id="cs_t",
         product_id="p",
         topic="t",
-        skill_kind="master",
         config_path="x",
     )
     assert state["revision_count"] == 0

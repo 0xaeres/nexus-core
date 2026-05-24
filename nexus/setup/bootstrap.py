@@ -1,15 +1,13 @@
 """Skills-repo bootstrap orchestrator.
 
-Either creates a new GitHub repo or attaches to an existing one, clones it to a
-temp working dir, copies the bundled starter pack into `shared/`, commits, and
-pushes. Idempotent on the seed step — if `shared/` already has files in the
-target repo we don't overwrite.
+Either creates a new GitHub repo or attaches to an existing one. The repo
+is left empty after creation; per-product skill files are written as the
+council approves them.
 """
 
 from __future__ import annotations
 
 import logging
-import shutil
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -21,11 +19,6 @@ from nexus.setup.github_api import create_repo
 log = logging.getLogger(__name__)
 
 
-def starter_pack_root() -> Path:
-    """Absolute path to the bundled `starter/shared/` directory."""
-    return Path(__file__).resolve().parent.parent / "skills" / "starter" / "shared"
-
-
 class BootstrapError(RuntimeError):
     """Raised when the bootstrap flow cannot complete."""
 
@@ -33,7 +26,7 @@ class BootstrapError(RuntimeError):
 @dataclass
 class BootstrapResult:
     skills_repo_url: str
-    files_seeded: int
+    files_seeded: int  # kept for response-shape compatibility; always 0 now
     commit_sha: str | None
     created_repo: bool
 
@@ -49,15 +42,14 @@ async def bootstrap_skills_repo(
     """Run the skills_repo bootstrap.
 
     Args:
-        mode: "create" to mint a new repo via GitHub API; "existing" to attach to
-              a repo the user already owns.
+        mode: "create" to mint a new repo via GitHub API; "existing" to attach
+              to a repo the user already owns.
         github_token: PAT with `repo` scope. Required for `mode="create"` and
-                      to push to an existing private repo.
-        github_org: When provided, the new repo is created under this org;
+                      to push to a private existing repo.
+        github_org: When set, the new repo is created under this org;
                     otherwise under the authenticated user.
         repo_name: Name of the repo to create (mode="create" only).
-        existing_repo_url: Clone URL (HTTPS or SSH) of an existing repo
-                           (mode="existing" only).
+        existing_repo_url: Clone URL of an existing repo (mode="existing").
     """
     if mode not in {"create", "existing"}:
         raise BootstrapError(f"unknown mode: {mode!r}")
@@ -80,73 +72,25 @@ async def bootstrap_skills_repo(
         clone_url = _authenticated_clone_url(existing_repo_url, github_token)
         canonical_url = existing_repo_url
 
-    starter = starter_pack_root()
-    if not starter.is_dir():
-        raise BootstrapError(f"starter pack not found at {starter}")
-
+    # Verify we can clone — that's the only real bootstrap step now. Skills
+    # land as the council approves them.
     with tempfile.TemporaryDirectory(prefix="nexus-bootstrap-") as tmp:
         workdir = Path(tmp) / "skills"
         try:
-            repo = Repo.clone_from(clone_url, str(workdir))
+            Repo.clone_from(clone_url, str(workdir))
         except Exception as e:
             raise BootstrapError(f"clone failed: {e}") from e
 
-        shared_dir = workdir / "shared"
-        files_seeded = _copy_starter_pack_into(starter, shared_dir)
-
-        if files_seeded == 0:
-            log.info("bootstrap: shared/ already populated, nothing to seed")
-            return BootstrapResult(
-                skills_repo_url=canonical_url,
-                files_seeded=0,
-                commit_sha=None,
-                created_repo=created_repo,
-            )
-
-        repo.git.add(A=True)
-        if not repo.is_dirty(untracked_files=True):
-            return BootstrapResult(
-                skills_repo_url=canonical_url,
-                files_seeded=files_seeded,
-                commit_sha=None,
-                created_repo=created_repo,
-            )
-        commit = repo.index.commit(
-            f"bootstrap: seed starter pack ({files_seeded} skills)"
-        )
-        try:
-            repo.remotes.origin.push()
-        except Exception as e:
-            raise BootstrapError(f"push failed: {e}") from e
-
-        return BootstrapResult(
-            skills_repo_url=canonical_url,
-            files_seeded=files_seeded,
-            commit_sha=commit.hexsha,
-            created_repo=created_repo,
-        )
-
-
-def _copy_starter_pack_into(starter: Path, dest_shared: Path) -> int:
-    """Copy starter pack files that aren't already present. Returns count copied."""
-    copied = 0
-    for src in sorted(starter.rglob("*.skill.md")):
-        rel = src.relative_to(starter)
-        target = dest_shared / rel
-        if target.exists():
-            continue
-        target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(src, target)
-        copied += 1
-    return copied
+    return BootstrapResult(
+        skills_repo_url=canonical_url,
+        files_seeded=0,
+        commit_sha=None,
+        created_repo=created_repo,
+    )
 
 
 def _authenticated_clone_url(url: str, token: str | None) -> str:
-    """Inline a PAT into the HTTPS clone URL so push doesn't prompt for creds.
-
-    SSH URLs and missing tokens are passed through untouched — caller is
-    expected to have SSH keys set up in that case.
-    """
+    """Inline a PAT into the HTTPS clone URL so push doesn't prompt for creds."""
     if not token:
         return url
     if not url.startswith("https://"):

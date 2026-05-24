@@ -6,7 +6,6 @@ def test_initial_state_has_empty_streams() -> None:
         session_id="cs_1",
         product_id="forge",
         topic="overview",
-        skill_kind="master",
         config_path="nexus.yaml",
     )
     assert s["deliberation"] == []

@@ -138,7 +138,6 @@ def query(
 @council_app.command("draft")
 def council_draft(
     topic: str = typer.Option(..., "--topic", "-t"),
-    skill_kind: str = typer.Option("product_domain", "--kind"),
     product: str = typer.Option(..., "--product", "-p"),
     config_path: Path = typer.Option(Path("nexus.yaml"), "--config", "-c"),
 ) -> None:
@@ -159,14 +158,12 @@ def council_draft(
     started_at = _dt.now(_UTC).isoformat()
     typer.echo(f"Council session {session_id} starting…")
     typer.echo(f"  topic   : {topic}")
-    typer.echo(f"  kind    : {skill_kind}")
     typer.echo(f"  product : {product}")
 
     initial = initial_state(
         session_id=session_id,
         product_id=product,
         topic=topic,
-        skill_kind=skill_kind,
         config_path=str(config_path),
     )
 
@@ -191,14 +188,12 @@ def council_draft(
         proposal,
         session_id=session_id,
         product_id=product,
-        skill_kind=skill_kind,
         deliberation=deliberation,
         costs=costs,
     )
     queue.record_session(
         session_id=session_id,
         product_id=product,
-        skill_kind=skill_kind,
         topic=topic,
         proposal_id=proposal.id,
         deliberation=deliberation,

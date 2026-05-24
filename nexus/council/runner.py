@@ -92,7 +92,6 @@ async def kick_off(
     queue: ProposalQueue,
     product_id: str,
     topic: str,
-    skill_kind: str,
     session_id: str | None = None,
 ) -> str:
     """Schedule a council run as an asyncio task. Returns the session_id."""
@@ -104,7 +103,6 @@ async def kick_off(
             session_id=sid,
             product_id=product_id,
             topic=topic,
-            skill_kind=skill_kind,
         ),
         name=f"council-{sid}",
     )
@@ -120,7 +118,6 @@ async def _run_session(
     session_id: str,
     product_id: str,
     topic: str,
-    skill_kind: str,
 ) -> None:
     started_at = datetime.now(UTC).isoformat()
     try:
@@ -132,7 +129,6 @@ async def _run_session(
                     "session_id": session_id,
                     "product_id": product_id,
                     "topic": topic,
-                    "skill_kind": skill_kind,
                 },
             },
         )
@@ -140,7 +136,6 @@ async def _run_session(
             session_id=session_id,
             product_id=product_id,
             topic=topic,
-            skill_kind=skill_kind,
             config_path="nexus.yaml",
         )
         deliberation_dumped: list[dict] = []
@@ -172,14 +167,12 @@ async def _run_session(
                 proposal,
                 session_id=session_id,
                 product_id=product_id,
-                skill_kind=skill_kind,
                 deliberation=deliberation_dumped,
                 costs=costs_dumped,
             )
             queue.record_session(
                 session_id=session_id,
                 product_id=product_id,
-                skill_kind=skill_kind,
                 topic=topic,
                 proposal_id=proposal.id,
                 deliberation=deliberation_dumped,
@@ -196,7 +189,6 @@ async def _run_session(
             queue.record_session(
                 session_id=session_id,
                 product_id=product_id,
-                skill_kind=skill_kind,
                 topic=topic,
                 proposal_id=None,
                 deliberation=deliberation_dumped,

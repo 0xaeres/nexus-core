@@ -6,7 +6,6 @@ from fastapi import APIRouter, Depends
 
 from nexus.api.deps import get_proposal_queue, get_skill_store
 from nexus.council.queue import ProposalQueue
-from nexus.skills.models import OrgSkill, Skill
 from nexus.skills.store import SkillStore
 
 router = APIRouter(tags=["dashboard"])
@@ -20,11 +19,7 @@ async def dashboard(
 ) -> dict:
     sessions = queue.list_sessions(product_id=product_id)
     pending = queue.list(status="pending", product_id=product_id)
-    skills = [
-        s
-        for s in store.iter_skills()
-        if isinstance(s, OrgSkill) or (isinstance(s, Skill) and s.product == product_id)
-    ]
+    skills = [s for s in store.iter_skills() if s.product == product_id]
     return {
         "daemon": {"state": "idle", "lastEvent": None},
         "pipeline": [
@@ -36,7 +31,6 @@ async def dashboard(
         "pending": [
             {
                 "id": p["id"],
-                "kind": p["skill_kind"],
                 "label": p["name"],
                 "confidence": p["confidence"],
             }

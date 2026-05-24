@@ -22,7 +22,6 @@ def test_enqueue_then_list_returns_proposal(tmp_path: Path) -> None:
         _make_proposal(),
         session_id="cs_x",
         product_id="forge",
-        skill_kind="product_domain",
     )
     pending = queue.list(status="pending")
     assert len(pending) == 1
@@ -35,10 +34,10 @@ def test_enqueue_then_list_returns_proposal(tmp_path: Path) -> None:
 def test_list_filters_by_product(tmp_path: Path) -> None:
     queue = ProposalQueue(tmp_path / "p.db")
     queue.enqueue(
-        _make_proposal("a"), session_id="s1", product_id="forge", skill_kind="master"
+        _make_proposal("a"), session_id="s1", product_id="forge"
     )
     queue.enqueue(
-        _make_proposal("b"), session_id="s2", product_id="atlas", skill_kind="master"
+        _make_proposal("b"), session_id="s2", product_id="atlas"
     )
     assert {p["name"] for p in queue.list(product_id="forge")} == {"a"}
     assert {p["name"] for p in queue.list(product_id="atlas")} == {"b"}
@@ -47,7 +46,7 @@ def test_list_filters_by_product(tmp_path: Path) -> None:
 def test_update_status_transitions(tmp_path: Path) -> None:
     queue = ProposalQueue(tmp_path / "u.db")
     p = _make_proposal()
-    queue.enqueue(p, session_id="s", product_id="forge", skill_kind="master")
+    queue.enqueue(p, session_id="s", product_id="forge")
     assert queue.update_status(p.id, status="rejected", actor="reviewer@x")
     row = queue.get(p.id)
     assert row is not None
@@ -61,7 +60,6 @@ def test_record_and_get_session(tmp_path: Path) -> None:
     queue.record_session(
         session_id="cs_demo",
         product_id="forge",
-        skill_kind="master",
         topic="overview",
         proposal_id="prop_demo",
         deliberation=[{"agent": "archaeologist", "body": "found stuff"}],
@@ -82,7 +80,6 @@ def test_list_sessions_orders_newest_first(tmp_path: Path) -> None:
         queue.record_session(
             session_id=f"cs_{i}",
             product_id="forge",
-            skill_kind="master",
             topic=f"topic_{i}",
             proposal_id=None,
             deliberation=[],
