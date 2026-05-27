@@ -76,7 +76,7 @@ class EnrichCfg(BaseModel):
 class IngestionCfg(BaseModel):
     enrich_chunks: EnrichCfg = Field(default_factory=EnrichCfg)
     embed_batch_size: int = 16          # M2/8GB: 16 | upgrade 16GB+: 32
-    quality_gate_threshold: float = 0.3
+    quality_gate_threshold: float = 0.0
     file_batch_size: int = 20           # M2/8GB: 20 | upgrade 16GB+: 50
     read_concurrency: int = 5           # M2/8GB: 5  | upgrade 16GB+: 10
     enricher_concurrency: int = 4       # cloud inference — rate-limited, not RAM-limited

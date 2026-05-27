@@ -18,6 +18,7 @@ from nexus.council.agents._common import (
     evidence_for_prompt,
     hits_to_evidence,
 )
+from nexus.council.errors import CouncilNoEvidence
 from nexus.council.skill_parser import (
     parse_skill_markdown,
     strip_uncited_rules,
@@ -116,7 +117,7 @@ async def run(
     evidence = hits_to_evidence(result.hits, limit=20)
 
     if not evidence:
-        raise RuntimeError("no evidence retrieved; ingest source content before running council")
+        raise _no_evidence_error(result, config)
 
     repo_map = load_repo_map_for_product(config, product_id)
     repo_map_block = repo_map.render(bias_terms=topic_bias_terms(topic), token_budget=500)
@@ -242,6 +243,35 @@ def _merge_section_fill(current: str, fill: str) -> str:
     if not fill:
         return current
     return current.rstrip() + "\n\n" + fill + "\n"
+
+
+def _no_evidence_error(result, config: NexusConfig) -> CouncilNoEvidence:
+    gate = config.ingestion.quality_gate_threshold
+    if result.seed_count and result.filtered_by_gate:
+        best = result.best_score_before_gate
+        best_text = "unknown" if best is None else f"{best:.3g}"
+        detail = (
+            "retrieval found "
+            f"{result.seed_count} candidate chunk(s), but quality_gate_threshold={gate:g} "
+            f"filtered every reranked hit (best_score={best_text}). Lower "
+            "ingestion.quality_gate_threshold, or set it to 0.0 for local Jina "
+            "reranker scores, then retry the council session."
+        )
+        return CouncilNoEvidence(
+            user_message=(
+                "Council stopped before drafting because the retrieval quality gate "
+                "filtered every candidate evidence chunk. Lower the quality gate and "
+                "run the council again."
+            ),
+            detail=detail,
+        )
+    return CouncilNoEvidence(
+        user_message=(
+            "Council stopped before drafting because no evidence chunks were found. "
+            "Sync source content, then run the council again."
+        ),
+        detail="retrieval found no candidate chunks; sync source content before running council",
+    )
 
 
 # silence unused import in this module

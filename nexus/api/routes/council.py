@@ -62,6 +62,21 @@ async def session_stream(
         }
         for msg in sess.get("deliberation", []):
             yield {"event": "message", "data": json.dumps(msg)}
+        if sess.get("status") == "stopped":
+            message = "Council stopped before producing a proposal."
+            deliberation = sess.get("deliberation", [])
+            if deliberation:
+                message = deliberation[-1].get("body") or message
+            yield {
+                "event": "notice",
+                "data": json.dumps(
+                    {
+                        "level": "info",
+                        "reason": "stopped",
+                        "message": message,
+                    }
+                ),
+            }
         for cost in sess.get("costs", []):
             yield {"event": "cost", "data": json.dumps(cost)}
         if sess.get("proposal_id"):

@@ -65,7 +65,7 @@ async def get_product(
 
 
 # Live stages, ordered from latest to earliest.
-_TERMINAL_SESSION_STATUSES = {"completed", "failed"}
+_TERMINAL_SESSION_STATUSES = {"completed", "failed", "stopped"}
 
 
 @router.get("/products/{product_id}/status")
@@ -142,5 +142,4 @@ async def create_product(
         "onboardedAt": datetime.now(UTC).isoformat(),
     })
     return registry.get_product(id)
-
 

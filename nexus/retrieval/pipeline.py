@@ -25,6 +25,9 @@ log = logging.getLogger(__name__)
 class RetrievalResult:
     hits: list[Hit]
     reranked: bool = True
+    seed_count: int = 0
+    filtered_by_gate: int = 0
+    best_score_before_gate: float | None = None
 
 
 @dataclass
@@ -81,7 +84,7 @@ async def retrieve(
     )
 
     if not seed_set:
-        return RetrievalResult(hits=[], reranked=False)
+        return RetrievalResult(hits=[], reranked=False, seed_count=0)
 
     reranked = True
     try:
@@ -103,9 +106,18 @@ async def retrieve(
 
     gate = ctx.config.ingestion.quality_gate_threshold
     if reranked:
-        final_hits = [h for h in final_hits if h.score >= gate]
+        final_hits, filtered_by_gate, best_score = _apply_quality_gate(final_hits, gate)
+    else:
+        filtered_by_gate = 0
+        best_score = max((h.score for h in final_hits), default=None)
 
-    return RetrievalResult(hits=final_hits, reranked=reranked)
+    return RetrievalResult(
+        hits=final_hits,
+        reranked=reranked,
+        seed_count=len(seed_set),
+        filtered_by_gate=filtered_by_gate,
+        best_score_before_gate=best_score,
+    )
 
 
 async def _hybrid_search(
@@ -158,3 +170,9 @@ def _to_doc(hit: Hit) -> str:
     head = f"[{anchor}]" + (f" {ctx_path}" if ctx_path else "")
     body = payload.get("content", "")
     return f"{head}\n{body}"
+
+
+def _apply_quality_gate(hits: list[Hit], gate: float) -> tuple[list[Hit], int, float | None]:
+    best_score = max((h.score for h in hits), default=None)
+    kept = [h for h in hits if h.score >= gate]
+    return kept, len(hits) - len(kept), best_score

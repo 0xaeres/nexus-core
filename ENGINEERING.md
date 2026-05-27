@@ -331,7 +331,11 @@ BM25(query) ──► sparse top-50 ┘
 
 `mode="auto"` queries both `code` + `text` collections; `mode="code"` or
 `"text"` restricts. Reranker score gate (`IngestionCfg.quality_gate_threshold`,
-default 0.3) filters obviously-bad rerank results when the rerank succeeded.
+default `0.0`) applies only after rerank succeeds: chunks with reranker scores
+below the gate are dropped. Dense embedding scores, BM25 scores, and reranker
+scores are separate scales; this gate is not an embedding-similarity threshold.
+Keep the local Jina/llama.cpp default at `0.0` unless an eval set shows a
+higher cutoff improves precision without losing needed evidence.
 
 Nothing else. **No** classifier, **no** HyDE, **no** semantic cache, **no**
 circuit breakers, **no** graph expansion, **no** prompt-injection guard. The
@@ -638,7 +642,7 @@ ingestion:
     docs: true                 # Anthropic Contextual Retrieval
     code: true                 # HQE
   embed_batch_size: 16
-  quality_gate_threshold: 0.3
+  quality_gate_threshold: 0.0  # reranker score gate; 0.0 keeps local Jina permissive
   file_batch_size: 20          # M2/8GB; bump to 50 on 16GB+
   read_concurrency: 5          # M2/8GB; bump to 10 on 16GB+
   enricher_concurrency: 4

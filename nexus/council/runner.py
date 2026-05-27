@@ -16,6 +16,7 @@ from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 
 from nexus.config import NexusConfig
+from nexus.council.errors import CouncilAgentError, CouncilStop
 from nexus.council.graph import build_graph, council_handles, open_checkpointer
 from nexus.council.queue import ProposalQueue
 from nexus.council.state import initial_state
@@ -207,6 +208,32 @@ async def _run_session(
             )
             await HUB.publish(session_id, {"event": "error", "data": "no proposal produced"})
     except Exception as e:  # pragma: no cover - defensive
+        stopped = _controlled_stop(e)
+        if stopped is not None:
+            stopped_at = datetime.now(UTC).isoformat()
+            notice = _stop_notice(stop=stopped, timestamp=stopped_at)
+            log.info(
+                "council session %s stopped: %s: %s",
+                session_id,
+                stopped.reason,
+                stopped.detail,
+            )
+            deliberation_dumped.append(notice["message"])
+            queue.record_session(
+                session_id=session_id,
+                product_id=product_id,
+                topic=topic,
+                proposal_id=None,
+                deliberation=deliberation_dumped,
+                costs=costs_dumped,
+                started_at=started_at,
+                completed_at=stopped_at,
+                status="stopped",
+            )
+            await HUB.publish(session_id, {"event": "notice", "data": notice["notice"]})
+            await HUB.publish(session_id, {"event": "message", "data": notice["message"]})
+            return
+
         log.exception("council session %s crashed", session_id)
         failed_at = datetime.now(UTC).isoformat()
         failure = _failure_message(error=e, timestamp=failed_at)
@@ -282,6 +309,31 @@ def _failure_message(*, error: Exception, timestamp: str) -> dict:
         "timestamp": timestamp,
         "body": f"Council failed: {type(error).__name__}: {error}",
         "cite_ids": [],
+    }
+
+
+def _controlled_stop(error: Exception) -> CouncilStop | None:
+    if isinstance(error, CouncilStop):
+        return error
+    if isinstance(error, CouncilAgentError) and isinstance(error.cause, CouncilStop):
+        return error.cause
+    return None
+
+
+def _stop_notice(*, stop: CouncilStop, timestamp: str) -> dict:
+    return {
+        "notice": {
+            "level": "info",
+            "reason": stop.reason,
+            "message": stop.user_message,
+            "detail": stop.detail,
+        },
+        "message": {
+            "agent": "system",
+            "timestamp": timestamp,
+            "body": stop.user_message,
+            "cite_ids": [],
+        },
     }
 
 
