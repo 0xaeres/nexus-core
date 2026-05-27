@@ -8,6 +8,7 @@ def _make_proposal(name: str = "demo", confidence: float = 0.5) -> SkillProposal
     return SkillProposal(
         id=f"prop_{name}",
         name=name,
+        tier="domain",
         body="# Demo\n\nBody [file: a/b.py:10].",
         citations=[Citation(file="a/b.py", line=10, excerpt="x")],
         confidence=confidence,
@@ -26,6 +27,7 @@ def test_enqueue_then_list_returns_proposal(tmp_path: Path) -> None:
     pending = queue.list(status="pending")
     assert len(pending) == 1
     assert pending[0]["name"] == "demo"
+    assert pending[0]["tier"] == "domain"
     assert pending[0]["citations"] == [
         {"id": None, "file": "a/b.py", "line": 10, "excerpt": "x"}
     ]
@@ -62,6 +64,7 @@ def test_record_and_get_session(tmp_path: Path) -> None:
         product_id="forge",
         topic="overview",
         proposal_id="prop_demo",
+        proposal_ids=["prop_demo", "prop_api"],
         deliberation=[{"agent": "archaeologist", "body": "found stuff"}],
         costs=[{"agent": "archaeologist", "prompt_tokens": 100, "completion_tokens": 50}],
         started_at="2026-05-18T00:00:00Z",
@@ -70,6 +73,7 @@ def test_record_and_get_session(tmp_path: Path) -> None:
     s = queue.get_session("cs_demo")
     assert s is not None
     assert s["topic"] == "overview"
+    assert s["proposal_ids"] == ["prop_demo", "prop_api"]
     assert s["deliberation"] == [{"agent": "archaeologist", "body": "found stuff"}]
     assert s["costs"][0]["prompt_tokens"] == 100
 

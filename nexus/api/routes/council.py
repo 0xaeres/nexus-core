@@ -82,7 +82,12 @@ async def session_stream(
         if sess.get("proposal_id"):
             yield {
                 "event": "proposal",
-                "data": json.dumps({"proposal_id": sess["proposal_id"]}),
+                "data": json.dumps(
+                    {
+                        "proposal_id": sess["proposal_id"],
+                        "proposal_ids": sess.get("proposal_ids") or [],
+                    }
+                ),
             }
         yield {"event": "session_end", "data": "{}"}
 

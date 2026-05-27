@@ -1,6 +1,4 @@
-"""Conditional edge logic of the 3-node council graph (no LLM calls)."""
-
-from langgraph.graph import END
+"""Conditional edge logic of the product skill-pack council graph."""
 
 from nexus.config import (
     EnrichCfg,
@@ -13,8 +11,7 @@ from nexus.config import (
     VectorStoreCfg,
 )
 from nexus.council.graph import build_graph
-from nexus.council.state import initial_state
-from nexus.skills.models import Critique
+from nexus.council.state import JudgeResult, initial_state
 
 
 def _make_cfg() -> NexusConfig:
@@ -35,30 +32,30 @@ def _make_cfg() -> NexusConfig:
     )
 
 
-def _route(severity: str, revision_count: int) -> str:
-    """Re-implement the predicate so we don't have to spin up handles."""
-    if severity == "blocking" and revision_count == 0:
-        return "reviser"
-    return END
+def _route(missing_evidence: bool, callback_count: int) -> str:
+    from nexus.council.agents.pack import should_callback
+
+    return should_callback(
+        {
+            "judge_result": JudgeResult(
+                passed=not missing_evidence,
+                missing_evidence=missing_evidence,
+            ),
+            "callback_count": callback_count,
+        }
+    )
 
 
-def test_blocking_first_pass_routes_to_reviser() -> None:
-    crit = Critique(severity="blocking", issues=[], recommendation="revise")
-    assert _route(crit.severity, 0) == "reviser"
+def test_missing_evidence_first_pass_routes_to_callback() -> None:
+    assert _route(True, 0) == "targeted_callback"
 
 
-def test_blocking_after_revision_ends() -> None:
-    crit = Critique(severity="blocking", issues=[], recommendation="still bad")
-    assert _route(crit.severity, 1) == END
+def test_missing_evidence_after_callback_routes_to_finalizer() -> None:
+    assert _route(True, 1) == "finalizer"
 
 
-def test_major_never_triggers_revision() -> None:
-    assert _route("major", 0) == END
-    assert _route("major", 1) == END
-
-
-def test_minor_never_triggers_revision() -> None:
-    assert _route("minor", 0) == END
+def test_no_missing_evidence_routes_to_finalizer() -> None:
+    assert _route(False, 0) == "finalizer"
 
 
 def test_initial_state_revision_zero() -> None:
@@ -72,10 +69,12 @@ def test_initial_state_revision_zero() -> None:
     assert state["critique"] is None
     assert state["proposal"] is None
     assert state["evidence"] == []
+    assert state["callback_count"] == 0
+    assert state["proposals"] == []
 
 
-def test_build_graph_has_three_nodes() -> None:
-    """Smoke: graph has Drafter, Critic, Reviser and the conditional edge."""
+def test_build_graph_has_pack_nodes() -> None:
+    """Smoke: graph has the bounded skill-pack council nodes."""
     from nexus.council.graph import CouncilHandles
 
     handles = CouncilHandles.__new__(CouncilHandles)
@@ -85,6 +84,10 @@ def test_build_graph_has_three_nodes() -> None:
     handles.chat_reviser = None  # type: ignore[assignment]
 
     graph = build_graph(_make_cfg(), handles)
-    assert "drafter" in graph.nodes
-    assert "critic" in graph.nodes
-    assert "reviser" in graph.nodes
+    assert "planner" in graph.nodes
+    assert "experts" in graph.nodes
+    assert "synthesizer" in graph.nodes
+    assert "repair" in graph.nodes
+    assert "judge" in graph.nodes
+    assert "targeted_callback" in graph.nodes
+    assert "finalizer" in graph.nodes

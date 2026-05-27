@@ -150,6 +150,7 @@ async def _run_session(
             config_path="nexus.yaml",
         )
         proposal = None
+        proposals = []
 
         async with (
             council_handles(config) as handles,
@@ -170,20 +171,29 @@ async def _run_session(
                         costs_dumped.append(_dump(c))
                     if "proposal" in delta and delta["proposal"] is not None:
                         proposal = delta["proposal"]
+                    if delta.get("proposals"):
+                        proposals = list(delta["proposals"])
 
-        if proposal is not None:
-            queue.enqueue(
-                proposal,
-                session_id=session_id,
-                product_id=product_id,
-                deliberation=deliberation_dumped,
-                costs=costs_dumped,
-            )
+        if proposal is not None or proposals:
+            if not proposals and proposal is not None:
+                proposals = [proposal]
+            if proposal is None:
+                proposal = proposals[0]
+            proposal_ids = [p.id for p in proposals]
+            for item in proposals:
+                queue.enqueue(
+                    item,
+                    session_id=session_id,
+                    product_id=product_id,
+                    deliberation=deliberation_dumped,
+                    costs=costs_dumped,
+                )
             queue.record_session(
                 session_id=session_id,
                 product_id=product_id,
                 topic=topic,
                 proposal_id=proposal.id,
+                proposal_ids=proposal_ids,
                 deliberation=deliberation_dumped,
                 costs=costs_dumped,
                 started_at=started_at,
@@ -192,7 +202,10 @@ async def _run_session(
             )
             await HUB.publish(
                 session_id,
-                {"event": "proposal", "data": {"proposal_id": proposal.id}},
+                {
+                    "event": "proposal",
+                    "data": {"proposal_id": proposal.id, "proposal_ids": proposal_ids},
+                },
             )
         else:
             queue.record_session(
@@ -200,6 +213,7 @@ async def _run_session(
                 product_id=product_id,
                 topic=topic,
                 proposal_id=None,
+                proposal_ids=[],
                 deliberation=deliberation_dumped,
                 costs=costs_dumped,
                 started_at=started_at,
@@ -224,6 +238,7 @@ async def _run_session(
                 product_id=product_id,
                 topic=topic,
                 proposal_id=None,
+                proposal_ids=[],
                 deliberation=deliberation_dumped,
                 costs=costs_dumped,
                 started_at=started_at,
@@ -243,6 +258,7 @@ async def _run_session(
             product_id=product_id,
             topic=topic,
             proposal_id=None,
+            proposal_ids=[],
             deliberation=deliberation_dumped,
             costs=costs_dumped,
             started_at=started_at,
@@ -288,11 +304,27 @@ async def _publish_node_delta(session_id: str, node_name: str, delta: dict) -> N
                 "data": {
                     "id": proposal.id,
                     "name": proposal.name,
+                    "tier": getattr(proposal, "tier", None),
                     "confidence": proposal.confidence,
                     "node": node_name,
                 },
             },
         )
+    if delta.get("proposals"):
+        for proposal in delta["proposals"]:
+            await HUB.publish(
+                session_id,
+                {
+                    "event": "proposal_preview",
+                    "data": {
+                        "id": proposal.id,
+                        "name": proposal.name,
+                        "tier": getattr(proposal, "tier", None),
+                        "confidence": proposal.confidence,
+                        "node": node_name,
+                    },
+                },
+            )
 
 
 def _dump(obj) -> dict:

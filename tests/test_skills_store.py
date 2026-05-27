@@ -9,6 +9,10 @@ def test_save_then_load_round_trip(tmp_path: Path) -> None:
     skill = Skill(
         name="example",
         product="forge",
+        tier="tech_stack",
+        parent="forge-master",
+        related=["forge/domain"],
+        coverage={"repos": ["api"], "topics": ["testing"]},
         version=2,
         confidence=0.5,
         applies_to=AppliesTo(files=["**/*.py"], contexts=["code-review"]),
@@ -28,6 +32,11 @@ def test_save_then_load_round_trip(tmp_path: Path) -> None:
     loaded = store.load_path(path)
     assert loaded.name == "example"
     assert loaded.product == "forge"
+    assert loaded.tier == "tech_stack"
+    assert loaded.parent == "forge-master"
+    assert loaded.related == ["forge/domain"]
+    assert loaded.coverage.repos == ["api"]
+    assert loaded.coverage.topics == ["testing"]
     assert loaded.confidence == 0.5
     assert loaded.applies_to.files == ["**/*.py"]
     assert loaded.body.strip() == "# Example\n\nBody here.".strip()

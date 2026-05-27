@@ -1,10 +1,12 @@
 """Markdown skill parser + completeness validator tests (no LLM calls)."""
 
+from nexus.council.agents.pack import _anchor_uncited_sections  # private guardrail
 from nexus.council.skill_parser import (
     _normalise_name,  # private but stable for tests
     parse_skill_markdown,
     strip_uncited_rules,
     validate_completeness,
+    validate_skill_markdown,
 )
 from nexus.council.state import EvidenceChunk
 
@@ -154,3 +156,75 @@ def test_validate_flags_missing_title() -> None:
     )
     report = validate_completeness(md)
     assert "title" in report.missing_sections
+
+
+def test_validate_product_master_requires_locked_sections_and_citations() -> None:
+    md = (
+        "# Demo Master\n\n"
+        "## Product Identity\nDemo [file: README.md:1].\n"
+        "## System Map\nMap [file: README.md:2].\n"
+        "## Repositories and Applications\nRepos [file: README.md:3].\n"
+        "## Architecture\nArchitecture [file: docs/arch.md:4].\n"
+        "## Domain Vocabulary\nTerms [file: docs/domain.md:5].\n"
+        "## Entity Relationships\nEntities [file: docs/domain.md:6].\n"
+        "## Interfaces and API Surface\nAPI [file: openapi.yaml:7].\n"
+        "## Testing and Delivery\nTests [file: pyproject.toml:8].\n"
+        "## Operational Guardrails\nOps [file: README.md:9].\n"
+        "## Skill Map\nRead focused skills.\n"
+        "## Rules\n"
+        "1. A [file: a.py:1].\n"
+        "2. B [file: b.py:2].\n"
+        "3. C [file: c.py:3].\n"
+        "## Anti-patterns\n- Avoid drift.\n"
+    )
+    assert validate_skill_markdown(md, tier="product_master").is_complete
+
+
+def test_validate_focused_skill_requires_full_shape() -> None:
+    md = (
+        "# API Skill\n\n"
+        "## Applies When\nUse for API changes [file: api.py:1].\n"
+        "## Context\nThe service exposes routes [file: api.py:2].\n"
+        "## Rules\n"
+        "1. A [file: a.py:1].\n"
+        "2. B [file: b.py:2].\n"
+        "3. C [file: c.py:3].\n"
+        "## Reference Patterns\nSee handler [file: api.py:4].\n"
+        "## Testing Guidance\nUse route tests [file: test_api.py:5].\n"
+        "## Anti-patterns\n- Do not bypass validation.\n"
+    )
+    assert validate_skill_markdown(md, tier="interface").is_complete
+
+
+def test_validate_focused_skill_rejects_uncited_context() -> None:
+    md = (
+        "# API Skill\n\n"
+        "## Applies When\nUse for API changes [file: api.py:1].\n"
+        "## Context\nThe service exposes routes.\n"
+        "## Rules\n"
+        "1. A [file: a.py:1].\n"
+        "2. B [file: b.py:2].\n"
+        "3. C [file: c.py:3].\n"
+        "## Reference Patterns\nSee handler [file: api.py:4].\n"
+        "## Testing Guidance\nUse route tests [file: test_api.py:5].\n"
+        "## Anti-patterns\n- Do not bypass validation.\n"
+    )
+    report = validate_skill_markdown(md, tier="interface")
+    assert not report.is_complete
+    assert "context (needs citation)" in report.short_sections
+
+
+def test_anchor_guardrail_fills_minimum_cited_rules() -> None:
+    md = (
+        "# API Skill\n\n"
+        "## Applies When\nUse for API changes.\n"
+        "## Context\nThe service exposes routes.\n"
+        "## Rules\n"
+        "1. One valid rule [file: a.rs:10]\n"
+        "2. Uncited rule.\n"
+        "## Reference Patterns\nSee handler.\n"
+        "## Testing Guidance\nUse route tests.\n"
+        "## Anti-patterns\n- Do not bypass validation.\n"
+    )
+    anchored = _anchor_uncited_sections(md, tier="interface", evidence=_evi())
+    assert validate_skill_markdown(anchored, tier="interface").is_complete

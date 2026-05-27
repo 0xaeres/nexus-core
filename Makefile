@@ -1,4 +1,4 @@
-.PHONY: help install services-up services-down observability-up docker-up docker-down embedder reranker light-llm api dev test lint format clean
+.PHONY: help install services-up services-down observability-up docker-up docker-down embedder reranker light-llm api dev test test-live-e2e lint format clean
 
 PIDDIR := .pids
 
@@ -13,6 +13,7 @@ help:
 	@echo "  make dev            — services-up + api (one shot)"
 	@echo "  make light-llm      — optional: start local Ollama for light model"
 	@echo "  make test           — pytest"
+	@echo "  make test-live-e2e  — real live backend E2E (requires NEXUS_LIVE_E2E=1)"
 	@echo "  make lint           — ruff check"
 	@echo "  make format         — ruff format"
 
@@ -80,6 +81,9 @@ dev: services-up api
 # ---------------------------------------------------------------- Quality
 test:
 	uv run pytest
+
+test-live-e2e:
+	NEXUS_LIVE_E2E=1 uv run pytest -q -m live_e2e
 
 lint:
 	uv run ruff check nexus tests

@@ -25,3 +25,14 @@ class CouncilNoEvidence(CouncilStop):
 
     def __init__(self, *, user_message: str, detail: str):
         super().__init__(reason="no_evidence", user_message=user_message, detail=detail)
+
+
+class CouncilIncompleteSkill(CouncilStop):
+    """A generated skill could not be repaired into the required structure."""
+
+    def __init__(self, *, user_message: str, detail: str):
+        super().__init__(
+            reason="incomplete_skill",
+            user_message=user_message,
+            detail=detail,
+        )

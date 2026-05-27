@@ -97,6 +97,8 @@ ignore = ["E501"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+addopts = "-m 'not eval and not live_e2e'"
 markers = [
     "eval: offline retrieval-quality benchmark (requires Qdrant + embedder + reranker; skip by default)",
+    "live_e2e: real live backend E2E (requires Qdrant + embedder + reranker + LLM; set NEXUS_LIVE_E2E=1)",
 ]

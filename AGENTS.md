@@ -1,8 +1,8 @@
 # Nexus — agent & contributor context
 
 This is the Python backend for **Nexus**, a sovereign, MCP-native **context
-engine**: it ingests an org's code + docs, runs a 3-node LLM council to draft
-curated **skill files** (human-approved), and serves them via MCP to any AI
+engine**: it ingests an org's code + docs, runs a bounded expert LLM council to
+draft curated **product skill packs** (human-approved), and serves them via MCP to any AI
 client. The sibling repo `../nexus-ui/` is the Next.js web UI.
 
 ## Read first
@@ -35,12 +35,14 @@ client. The sibling repo `../nexus-ui/` is the Next.js web UI.
 - **Chunks carry their context.** Code chunks get HQE (3 hypothetical
   questions) at ingest; doc chunks get Anthropic's Contextual Retrieval
   blurb. Both prepend at embed time via `text_for_embedding()`.
-- **Council is 3 nodes: Drafter → Critic → Reviser** (Reflexion shape). The
-  critic does its own fresh retrieval — that's the load-bearing piece. Cap
-  at 1 revision per session.
-- **Drafter / Reviser emit Markdown, not JSON.** Citations are regex-parsed
+- **Council is bounded expert-pack generation.** Planner → expert fanout
+  (Architect, Domain, Interface, Quality/Test, Security) → Synthesizer →
+  completeness Repair → Judge → optional one Targeted Callback → Finalizer.
+  The callback cap is 1 per session.
+- **Synthesizer emits Markdown skills, not JSON.** Citations are regex-parsed
   post-hoc. Long outputs auto-continue on `finish_reason="length"`. Missing
-  sections trigger one targeted section-fill pass.
+  sections trigger targeted section-fill repair, capped at 3 attempts per skill;
+  incomplete skills are never queued.
 - **Repo map** lives in the council system prompt: a tree-sitter symbol
   outline of the source tree, lexically ranked against the session topic,
   token-budgeted. Built at sync time, persisted under

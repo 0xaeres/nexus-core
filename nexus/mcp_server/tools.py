@@ -72,11 +72,14 @@ async def find_skills(
     if not all_skills:
         return {"skills": [], "warning": "no skills found at hierarchy_root"}
 
+    product_skills = [s for s in all_skills if s.product == state.product]
+    master_skills = [s for s in product_skills if s.tier == "product_master"]
     candidates = [
         s
-        for s in all_skills
+        for s in product_skills
         if _matches_file_globs(current_file, s.applies_to.files)
         and _matches_context(context, s.applies_to.contexts)
+        and s.tier != "product_master"
     ]
 
     ql = (query + " " + context).lower()
@@ -93,7 +96,9 @@ async def find_skills(
         scored.append((score, s))
 
     scored.sort(key=lambda x: x[0], reverse=True)
-    top = [s for _, s in scored[:top_k]]
+    masters = sorted(master_skills, key=lambda s: s.confidence, reverse=True)[:1]
+    remaining = max(top_k - len(masters), 0)
+    top = [*masters, *[s for _, s in scored[:remaining]]]
 
     out: list[dict] = []
     for s in top:
@@ -101,6 +106,7 @@ async def find_skills(
             {
                 "id": s.id,
                 "name": s.name,
+                "tier": s.tier,
                 "confidence": s.confidence,
                 "summary": _first_paragraph(s.body),
             }
@@ -109,7 +115,7 @@ async def find_skills(
         "query": query,
         "context": context,
         "current_file": current_file,
-        "filtered_from": len(all_skills),
+        "filtered_from": len(product_skills),
         "skills": out,
     }
 
@@ -117,6 +123,8 @@ async def find_skills(
 async def get_skill(state: ToolState, *, name: str) -> dict:
     """Return the full skill body + frontmatter."""
     for s in state.store.iter_skills():
+        if s.product != state.product:
+            continue
         if s.name == name:
             out = s.model_dump(mode="json")
             out["id"] = s.id
@@ -185,7 +193,7 @@ async def skill_hierarchy(state: ToolState) -> dict:
     return {
         "product": state.product,
         "skills": [
-            {"id": s.id, "name": s.name, "confidence": s.confidence}
+            {"id": s.id, "name": s.name, "tier": s.tier, "confidence": s.confidence}
             for s in state.store.iter_skills()
             if s.product == state.product
         ],
@@ -194,6 +202,8 @@ async def skill_hierarchy(state: ToolState) -> dict:
 
 async def skill_markdown(state: ToolState, *, name: str) -> str:
     for s in state.store.iter_skills():
+        if s.product != state.product:
+            continue
         if s.name == name:
             return s.body
     raise ValueError(f"skill not found: {name}")

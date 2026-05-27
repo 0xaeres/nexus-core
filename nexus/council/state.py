@@ -12,7 +12,7 @@ from typing import Annotated, TypedDict
 
 from pydantic import BaseModel, Field
 
-from nexus.skills.models import Critique, SkillProposal
+from nexus.skills.models import Critique, SkillProposal, SkillTier
 
 
 class EvidenceChunk(BaseModel):
@@ -37,6 +37,40 @@ class AgentCost(BaseModel):
     model: str = ""
 
 
+class SkillPlanItem(BaseModel):
+    name: str
+    tier: SkillTier
+    purpose: str = ""
+    parent: str | None = None
+    related: list[str] = Field(default_factory=list)
+    coverage: dict = Field(default_factory=dict)
+
+
+class ExpertReport(BaseModel):
+    expert: str
+    summary: str
+    findings: list[str] = Field(default_factory=list)
+    missing_questions: list[str] = Field(default_factory=list)
+    cite_ids: list[str] = Field(default_factory=list)
+
+
+class SkillDraft(BaseModel):
+    name: str
+    tier: SkillTier
+    parent: str | None = None
+    related: list[str] = Field(default_factory=list)
+    coverage: dict = Field(default_factory=dict)
+    body: str
+    repair_attempts: int = 0
+
+
+class JudgeResult(BaseModel):
+    passed: bool = True
+    missing_evidence: bool = False
+    questions: list[str] = Field(default_factory=list)
+    summary: str = ""
+
+
 class CouncilState(TypedDict, total=False):
     # Inputs
     session_id: str
@@ -46,6 +80,12 @@ class CouncilState(TypedDict, total=False):
 
     # Shared evidence — populated by Drafter; Critic adds its own re-retrieval to it.
     evidence: Annotated[list[EvidenceChunk], operator.add]
+    skill_plan: list[SkillPlanItem]
+    expert_reports: Annotated[list[ExpertReport], operator.add]
+    skill_drafts: list[SkillDraft]
+    proposals: list[SkillProposal]
+    judge_result: JudgeResult | None
+    callback_count: int
 
     # Per-node outputs
     proposal: SkillProposal | None
@@ -71,6 +111,12 @@ def initial_state(
         "topic": topic,
         "config_path": config_path,
         "evidence": [],
+        "skill_plan": [],
+        "expert_reports": [],
+        "skill_drafts": [],
+        "proposals": [],
+        "judge_result": None,
+        "callback_count": 0,
         "proposal": None,
         "proposal_id": None,
         "critique": None,

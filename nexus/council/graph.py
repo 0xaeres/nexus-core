@@ -1,13 +1,13 @@
-"""LangGraph StateGraph for the 3-node council.
+"""LangGraph StateGraph for the product skill-pack council.
 
-Topology (Reflexion-style draft-critique-revise, capped at 1 revision):
+Topology:
 
-    START -> Drafter -> Critic -> (blocking?) -> Reviser -> END
-                                ↘ (not blocking) ----------> END
+    START -> Planner -> Experts -> Synthesizer -> Repair -> Judge
+       -> (missing evidence?) -> Targeted Callback -> Synthesizer -> Repair -> Judge
+       -> Finalizer -> END
 
-The Critic does its OWN fresh retrieval against the corpus — the proven
-faithfulness lever per Reflexion (2023) and Anthropic's Constitutional AI.
-Without re-retrieval the critic devolves into sycophantic agreement.
+The graph is bounded: one targeted callback, three repair attempts per skill,
+and all outputs remain proposals until a human approves them.
 
 State is checkpointed to SQLite so a process kill mid-session can resume.
 """
@@ -24,7 +24,7 @@ from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from langgraph.graph import END, START, StateGraph
 
 from nexus.config import NexusConfig
-from nexus.council.agents import critic, drafter, reviser
+from nexus.council.agents import pack
 from nexus.council.errors import CouncilAgentError
 from nexus.council.state import CouncilState
 from nexus.llm.client import ChatClient
@@ -74,48 +74,79 @@ async def council_handles(config: NexusConfig) -> AsyncIterator[CouncilHandles]:
 
 
 def build_graph(config: NexusConfig, handles: CouncilHandles):
-    """StateGraph: START -> Drafter -> Critic -> route(blocking?) -> {Reviser, END}."""
+    """StateGraph for the bounded product skill-pack council."""
 
-    async def drafter_node(state: CouncilState) -> dict:
+    async def planner_node(state: CouncilState) -> dict:
         try:
-            return await drafter.run(
+            return await pack.planner(
                 state, config=config, retrieval=handles.retrieval, chat=handles.chat_drafter
             )
         except Exception as e:
-            raise CouncilAgentError("drafter", e) from e
+            raise CouncilAgentError("planner", e) from e
 
-    async def critic_node(state: CouncilState) -> dict:
+    async def experts_node(state: CouncilState) -> dict:
         try:
-            return await critic.run(
-                state, config=config, retrieval=handles.retrieval, chat=handles.chat_critic
+            return await pack.experts(
+                state, retrieval=handles.retrieval, chat=handles.chat_critic
             )
         except Exception as e:
-            raise CouncilAgentError("critic", e) from e
+            raise CouncilAgentError("experts", e) from e
 
-    async def reviser_node(state: CouncilState) -> dict:
+    async def synthesizer_node(state: CouncilState) -> dict:
         try:
-            return await reviser.run(state, config=config, chat=handles.chat_reviser)
+            return await pack.synthesizer(
+                state, config=config, chat=handles.chat_drafter
+            )
         except Exception as e:
-            raise CouncilAgentError("reviser", e) from e
+            raise CouncilAgentError("synthesizer", e) from e
 
-    def _route_after_critic(state: CouncilState) -> str:
-        crit = state.get("critique")
-        rev = state.get("revision_count", 0) or 0
-        if crit is not None and crit.severity == "blocking" and rev == 0:
-            return "reviser"
-        return END
+    async def repair_node(state: CouncilState) -> dict:
+        try:
+            return await pack.repair_loop(state, chat=handles.chat_reviser)
+        except Exception as e:
+            raise CouncilAgentError("repair", e) from e
+
+    async def judge_node(state: CouncilState) -> dict:
+        try:
+            return await pack.judge(state, chat=handles.chat_critic)
+        except Exception as e:
+            raise CouncilAgentError("judge", e) from e
+
+    async def callback_node(state: CouncilState) -> dict:
+        try:
+            return await pack.targeted_callback(
+                state, retrieval=handles.retrieval, chat=handles.chat_critic
+            )
+        except Exception as e:
+            raise CouncilAgentError("targeted_callback", e) from e
+
+    async def finalizer_node(state: CouncilState) -> dict:
+        try:
+            return await pack.finalizer(state)
+        except Exception as e:
+            raise CouncilAgentError("finalizer", e) from e
 
     graph: StateGraph = StateGraph(CouncilState)
-    graph.add_node("drafter", drafter_node)
-    graph.add_node("critic", critic_node)
-    graph.add_node("reviser", reviser_node)
+    graph.add_node("planner", planner_node)
+    graph.add_node("experts", experts_node)
+    graph.add_node("synthesizer", synthesizer_node)
+    graph.add_node("repair", repair_node)
+    graph.add_node("judge", judge_node)
+    graph.add_node("targeted_callback", callback_node)
+    graph.add_node("finalizer", finalizer_node)
 
-    graph.add_edge(START, "drafter")
-    graph.add_edge("drafter", "critic")
+    graph.add_edge(START, "planner")
+    graph.add_edge("planner", "experts")
+    graph.add_edge("experts", "synthesizer")
+    graph.add_edge("synthesizer", "repair")
+    graph.add_edge("repair", "judge")
     graph.add_conditional_edges(
-        "critic", _route_after_critic, {"reviser": "reviser", END: END}
+        "judge",
+        pack.should_callback,
+        {"targeted_callback": "targeted_callback", "finalizer": "finalizer"},
     )
-    graph.add_edge("reviser", END)
+    graph.add_edge("targeted_callback", "synthesizer")
+    graph.add_edge("finalizer", END)
 
     return graph
 

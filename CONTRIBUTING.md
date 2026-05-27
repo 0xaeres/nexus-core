@@ -31,12 +31,12 @@ vectors are safely written do we delete stale old chunk IDs. A tree-sitter
 repo map is also persisted for council prompt context.
 
 **Phase 2 — Council (on demand).** A user clicks "Run Council" on a topic.
-A 3-node LangGraph state machine fires: **Drafter** retrieves and writes a
-markdown skill; **Critic** does its *own* retrieval against the same corpus
-and scores the draft on a fixed rubric; **Reviser** runs only when the
-critic returns `severity == "blocking"`. The proposal is enqueued in
-SQLite, awaiting human approval. The council costs ~$0.01-0.02 per
-session.
+A bounded LangGraph skill-pack council runs: Planner retrieves and outlines a
+master skill plus focused skills; expert passes inspect architecture, domain,
+interfaces, quality/testing, and security; Synthesizer writes Markdown drafts;
+Repair validates and fills missing sections; Judge may request one targeted
+callback before Finalizer queues proposals in SQLite. Human approval is still
+required before anything becomes a skill file.
 
 **Phase 3 — Approve & serve.** The user reviews + edits + approves the
 proposal in the UI. `approve_proposal()` writes the `.skill.md` to the
@@ -86,12 +86,13 @@ retrieval/
   repomap.py        tree-sitter symbol outline, persisted per product
 
 council/
-  graph.py          LangGraph 3-node StateGraph: Drafter → Critic → Reviser
+  graph.py          LangGraph skill-pack StateGraph
   state.py          CouncilState TypedDict
   runner.py         Background asyncio task + SSE pub/sub hub
   queue.py          SQLite proposal/session tables
   skill_parser.py   Markdown parser + completeness validator
   agents/
+    pack.py         Planner, experts, synthesizer, repair, judge, finalizer
     drafter.py      One retrieval call, one LLM call, markdown out, completeness gate
     critic.py       Own fresh retrieval, fixed rubric, severity routing
     reviser.py      Fires only on blocking; same markdown + continuation + gate
@@ -247,40 +248,40 @@ This ordering prevents knowledge-base poisoning:
    - Publishes `session_start` event on `HUB`.
    - `initial_state(...)` builds the TypedDict.
    - Enters `council_handles(config)` context (retrieval + 3 chat clients).
-     By default Drafter, Critic, and Reviser all use `models.council`; optional
-     `models.drafter`, `models.critic`, and `models.reviser` override per role.
+     The pack nodes reuse the configured drafter/critic/reviser chat clients:
+     planner+synthesizer use drafter, experts+judge+callback use critic, and
+     repair uses reviser.
    - Compiles `build_graph()` with the SQLite checkpointer.
    - `compiled.astream(initial, ...)` — for each yielded node update:
      `_publish_node_delta(...)` translates state deltas into SSE events
      (`message`, `cost`, `critique`, `proposal_preview`).
-   - On completion: `queue.enqueue(proposal, ...)` + `queue.record_session(...)`.
+   - On completion: enqueues every finalized proposal and records both the
+     primary `proposal_id` and full `proposal_ids`.
    - On any node exception: the run is recorded as `failed`, an `error` event
      is streamed, and no proposal is enqueued. Council is all-or-none.
 4. UI's `CouncilSession.tsx` consumes `sessionStreamUrl(sid)` via SSE:
    - Live mode while running; deterministic replay after completion
      (see `council.py::session_stream`).
 
-### Trace 3 — Drafter writes a skill
+### Trace 3 — Synthesizer writes a skill pack
 
-`nexus/council/agents/drafter.py::run`:
+`nexus/council/agents/pack.py`:
 
 1. `retrieve(ctx, product_id, topic, top_k=20, mode="auto")` →
-   `RetrievalResult.hits`. Hits become `EvidenceChunk`s.
+   `RetrievalResult.hits`. Hits become planner `EvidenceChunk`s.
 2. `load_repo_map_for_product(config, product_id)` →
-   `repo_map.render(bias_terms=topic_bias_terms(topic), token_budget=500)`.
-   This block is prepended to the system prompt.
-3. `chat.chat_markdown(messages, max_tokens=3000, max_continuations=2)` —
-   on `finish_reason="length"`, the client resends the partial as an
-   assistant message + a "continue exactly where you stopped" user prompt
-   and concatenates.
-4. `validate_completeness(body)` → if any required section is missing or
-   short, one targeted section-fill pass against the same system prompt.
-5. `strip_uncited_rules(body)` removes list items in `## Rules` that lack
+   `repo_map.render(...)`. Planner and Synthesizer use this structure with
+   retrieved evidence.
+3. Expert passes retrieve fresh evidence for architecture, domain, interfaces,
+   quality/testing, and security.
+4. Synthesizer emits Markdown drafts with `chat.chat_markdown(...)`; long
+   outputs auto-continue on `finish_reason="length"`.
+5. `validate_skill_markdown(body, tier=...)` → missing/short sections trigger
+   targeted section-fill repair, capped at 3 attempts per skill.
+6. `strip_uncited_rules(body)` removes list items in `## Rules` that lack
    `[file: path:line]`.
-6. `parse_skill_markdown(body, evidence=evidence)` — H1 → name, regex →
-   citations.
-7. Build `SkillProposal` with `compute_confidence(citations, paragraphs,
-   revision_count=0)`. Return as state delta.
+7. `parse_skill_markdown(body, evidence=evidence)` — H1 → name, regex →
+   citations. Finalizer converts complete drafts into proposal rows.
 
 ### Trace 4 — Approve a proposal
 
@@ -371,7 +372,7 @@ isn't well-indexed (e.g. a bullet-list-only doc). Run
 `uv run python -m tests.eval.harness --product my-api` against your
 populated index. Watch recall drop. Revert (or fix the pipeline).
 
-**3. Trace a Drafter call through the LLM client.** In
+**3. Trace a Synthesizer call through the LLM client.** In
 `nexus/llm/client.py::chat_markdown`, add a `log.info(...)` at the top of
 the continuation loop. Run a council session via the UI. Watch the logs.
 Remove the log statement.
@@ -486,7 +487,7 @@ the marker is safe to leave in CI behind a conditional.
 | **Contextual Retrieval (CR)** | Anthropic's "situate this chunk within the document" prefix; the doc analogue of HQE. |
 | **repo map** | tree-sitter symbol outline of a product's source tree, injected into council system prompts. |
 | **RRF** | Reciprocal Rank Fusion — how dense and sparse retrieval hits are combined. |
-| **Drafter / Critic / Reviser** | The 3 council nodes (Reflexion shape). |
+| **Planner / Experts / Synthesizer / Repair / Judge / Finalizer** | The bounded skill-pack council nodes. |
 
 ## 12. Further reading
 

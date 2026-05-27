@@ -1,8 +1,8 @@
 # Nexus — Context Engine for Engineering Teams
 
 Nexus is a **sovereign, MCP-native context engine** for your codebase. It
-ingests your code and docs, runs a 3-node LLM council to draft curated skill
-files with human approval, and serves those skills back via MCP to any AI
+ingests your code and docs, runs a bounded expert LLM council to draft curated
+product skill packs with human approval, and serves those skills back via MCP to any AI
 client (Claude, Cursor, Continue, etc.).
 
 Every AI tool your team uses gets grounded in *your* actual code and
@@ -18,10 +18,10 @@ Your codebase + docs
   Hybrid retrieval (dense + BM25 + Jina rerank)
         │
         ▼
-  3-node council (Drafter → Critic → Reviser) drafts a skill
+  Expert council drafts a product skill pack
         │  ← seeded by an aider-style repo map + contextual chunks
         ▼
-  Human reviews + approves in the UI
+  Human reviews + approves proposals in the UI
         │
         ▼
   Skills served via MCP to Claude / Cursor / Continue / any agent
@@ -218,7 +218,7 @@ nexus/
 │   │                  indexer (Qdrant dense + BM25)
 │   ├── retrieval/     Hybrid pipeline (dense + BM25 → RRF → Jina reranker),
 │   │                  repomap (aider-style symbol outline)
-│   ├── council/       LangGraph 3-node council: Drafter, Critic, Reviser
+│   ├── council/       LangGraph skill-pack council: planner, experts, synthesizer
 │   │                  Plus runner (SSE), queue (SQLite), skill_parser
 │   ├── skills/        Skill model, store (YAML+Markdown), approval flow
 │   ├── connectors/    local_fs + MCP client

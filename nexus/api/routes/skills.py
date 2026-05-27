@@ -16,13 +16,15 @@ async def list_product_skills(
     product_id: str, store: SkillStore = Depends(get_skill_store)
 ) -> dict:
     skills: list[dict] = []
+    grouped: dict[str, list[dict]] = {}
     for s in store.iter_skills():
         if s.product != product_id:
             continue
         d = s.model_dump(mode="json")
         d["id"] = s.id
         skills.append(d)
-    return {"skills": skills}
+        grouped.setdefault(s.tier, []).append(d)
+    return {"skills": skills, "grouped": grouped}
 
 
 def _find_skill(store: SkillStore, skill_id: str):

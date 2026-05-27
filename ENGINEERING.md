@@ -6,9 +6,9 @@ needs a patch.
 
 ## Overview
 
-Nexus indexes a product's code + docs, runs a 3-node council to draft a
-curated skill file, requires a human to approve, and serves the resulting
-skill (and the raw corpus) over MCP to AI coding clients.
+Nexus indexes a product's code + docs, runs a bounded expert council to draft
+a product skill pack, requires humans to approve proposals, and serves the
+resulting skills (and the raw corpus) over MCP to AI coding clients.
 
 The system is deliberately small. Anything that doesn't move the
 `recall@10` / `MRR` number on `tests/eval/queries.json` or fix a real
@@ -301,9 +301,8 @@ Skipped: `node_modules`, `.venv`, `.git`, `dist`, `build`, `target`, `vendor`,
 At council time the map is loaded, ranked against the session topic (lexical
 overlap on `name + path` plus a small structural weight: classes > functions
 > methods), and rendered into a token-bounded block of `file:\n  signature
-[Lline]` lines. The render is injected as the system-prompt prefix for the
-Drafter, Critic, and Reviser so they see the codebase structure before any
-retrieval call.
+[Lline]` lines. The render is injected into planner/synthesizer prompts so the
+council sees the codebase structure alongside retrieved evidence.
 
 We deliberately skip aider's personalized-PageRank step in v1. With < 5k
 files, lexical + structural ranking is within striking distance and avoids
@@ -342,14 +341,17 @@ circuit breakers, **no** graph expansion, **no** prompt-injection guard. The
 retrieval eval set (§10) is the floor; only add layers if it moves the
 number.
 
-## 5. Council — 3-node Reflexion
+## 5. Council — Expert Skill Pack
 
-`nexus/council/graph.py`. LangGraph state graph, three nodes:
+`nexus/council/graph.py`. LangGraph state graph for product skill packs:
 
 ```
-START ──► Drafter ──► Critic ──► route(severity == "blocking" && rev == 0)
-                                  ├── true  ──► Reviser ──► END
-                                  └── false ────────────► END
+START ──► Planner ──► Experts ──► Synthesizer ──► Repair ──► Judge
+                                                               │
+                                  missing evidence && cb == 0? │
+                                                               ├── true ─► Targeted Callback
+                                                               │            └──► Synthesizer
+                                                               └── false ─► Finalizer ─► END
 ```
 
 State (`nexus/council/state.py::CouncilState`):
@@ -360,53 +362,41 @@ class CouncilState(TypedDict, total=False):
     product_id: str
     topic: str
     config_path: str
-    evidence: list[EvidenceChunk]   # reducer-merged: Drafter + Critic both append
+    evidence: list[EvidenceChunk]   # reducer-merged: planner + experts + callback
+    skill_plan: list[SkillPlanItem]
+    expert_reports: list[ExpertReport]
+    skill_drafts: list[SkillDraft]
+    proposals: list[SkillProposal]  # one master plus focused proposals
+    judge_result: JudgeResult | None
+    callback_count: int             # capped at 1
     proposal: SkillProposal | None
-    proposal_id: str | None
+    proposal_id: str | None         # primary/master proposal for compatibility
     critique: Critique | None
     revision_count: int             # capped at 1
     deliberation: list[DeliberationMessage]  # append-only stream
     costs: list[AgentCost]
 ```
 
-### Drafter (`nexus/council/agents/drafter.py`)
+### Pack Agents (`nexus/council/agents/pack.py`)
 
-One retrieval call (top-20, mode=auto), one LLM call. Receives the repo map
-in the system prompt, the retrieved evidence in the user prompt. Emits
-**Markdown** (not JSON-wrapped — that wastes 30-40% of the token budget on
-escaping). Uses `chat_markdown()` (§5.4) for auto-continuation. Validates
-completeness; one targeted section-fill pass if a required section is
-missing.
+Planner retrieves the initial evidence and creates one `product_master` skill
+outline plus 3-7 focused skill outlines. Expert fanout then runs five bounded
+lenses: Architect, Domain, Interface, Quality/Test, and Security. Experts do
+fresh retrieval so the Synthesizer sees more than the planner's initial chunk
+pool.
 
-Required sections (`nexus/council/skill_parser.py::validate_completeness`):
-- `# Title` (H1)
-- `## Rules` with ≥ 3 list items, **each cited** `[file: path:line]`
-- `## Anti-patterns` with ≥ 1 list item
+Synthesizer emits one Markdown skill per outline. The completeness repair loop
+validates every draft against the tier-specific schema and retries targeted
+section-fill up to `REPAIR_ATTEMPT_CAP = 3`. Incomplete skills are never queued:
+if repair still fails, the session stops with `reason="incomplete_skill"`.
 
-Post-parse guardrail (`strip_uncited_rules`): any list item under `## Rules`
-that lacks a `[file: ...]` citation is stripped before the proposal is
-queued.
+Judge checks evidence coverage and may request one targeted expert callback.
+After that callback, the graph re-synthesizes and repairs. A second unresolved
+evidence gap stops the session with `reason="insufficient_evidence"`.
 
-### Critic (`nexus/council/agents/critic.py`)
-
-**Does its own fresh retrieval.** This is the load-bearing piece per
-Reflexion (Shinn et al. 2023) and Anthropic's Constitutional AI: without
-re-retrieval the critic devolves into sycophantic agreement.
-
-Critic's query is built from the proposal's name + cited files, so it pulls
-chunks the Drafter may have *missed*. Scores against a fixed 4-axis rubric
-(faithfulness / completeness / specificity / anti-patterns); emits a
-`Critique` with severity ∈ `{blocking, major, minor}`.
-
-Only `blocking` triggers the Reviser. `major` and `minor` are stamped on
-the proposal but don't loop.
-
-### Reviser (`nexus/council/agents/reviser.py`)
-
-Sees the merged evidence pool (Drafter's + Critic's fresh chunks via the
-state reducer), the prior draft, and the defect list. Produces v2 with the
-same proposal id (so the queue row updates in place). `revision_count: 1`.
-Same Markdown + continuation + completeness-gate mechanics as the Drafter.
+Finalizer parses complete drafts into multiple `SkillProposal` rows. The
+primary/master proposal remains available as `proposal_id` for old clients;
+the full pack is persisted on the session as `proposal_ids`.
 
 ### LLM client (`nexus/llm/client.py`)
 
@@ -545,7 +535,7 @@ credentials plus product-scope project keys.
 | Method + path | Purpose |
 |---|---|
 | `GET /products/{id}/council/sessions` | List sessions for a product. |
-| `POST /products/{id}/council/sessions` | Body: `{topic: str}`. Schedules the 3-node council as a background task. Returns `{session_id}`. |
+| `POST /products/{id}/council/sessions` | Body: `{topic: str}`. Schedules the skill-pack council as a background task. Returns `{session_id}`. |
 | `GET /council/sessions/{sid}` | Persisted session row. |
 | `GET /council/sessions/{sid}/stream` | SSE: live deliberation if running; deterministic replay if completed. |
 

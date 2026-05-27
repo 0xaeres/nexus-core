@@ -21,6 +21,10 @@ CREATE TABLE IF NOT EXISTS proposals (
     session_id    TEXT,
     product_id    TEXT NOT NULL,
     name          TEXT NOT NULL,
+    tier          TEXT NOT NULL DEFAULT 'domain',
+    parent        TEXT,
+    related_js    TEXT NOT NULL DEFAULT '[]',
+    coverage_js   TEXT NOT NULL DEFAULT '{}',
     body          TEXT NOT NULL,
     citations_js  TEXT NOT NULL,
     confidence    REAL NOT NULL,
@@ -44,6 +48,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     product_id    TEXT NOT NULL,
     topic         TEXT NOT NULL,
     proposal_id   TEXT,
+    proposal_ids_js TEXT NOT NULL DEFAULT '[]',
     status        TEXT NOT NULL DEFAULT 'completed',
     deliberation_js TEXT NOT NULL DEFAULT '[]',
     costs_js      TEXT NOT NULL DEFAULT '[]',
@@ -64,6 +69,7 @@ class ProposalQueue:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         with self._conn() as conn:
             conn.executescript(_SCHEMA)
+            _ensure_columns(conn)
 
     @contextmanager
     def _conn(self) -> Iterator[sqlite3.Connection]:
@@ -95,15 +101,20 @@ class ProposalQueue:
         with self._conn() as conn:
             conn.execute(
                 """INSERT OR REPLACE INTO proposals
-                   (id, session_id, product_id, name, body, citations_js,
+                   (id, session_id, product_id, name, tier, parent, related_js,
+                    coverage_js, body, citations_js,
                     confidence, status, critique_js, created_at, approved_by, approved_at,
                     deliberation_js, costs_js)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (
                     proposal.id,
                     session_id,
                     product_id,
                     proposal.name,
+                    proposal.tier,
+                    proposal.parent,
+                    json.dumps(proposal.related),
+                    proposal.coverage.model_dump_json(),
                     proposal.body,
                     json.dumps([c.model_dump() for c in proposal.citations]),
                     proposal.confidence,
@@ -128,19 +139,21 @@ class ProposalQueue:
         costs: list[dict],
         started_at: str,
         completed_at: str,
+        proposal_ids: list[str] | None = None,
         status: str = "completed",
     ) -> None:
         with self._conn() as conn:
             conn.execute(
                 """INSERT OR REPLACE INTO sessions
-                   (id, product_id, topic, proposal_id, status,
+                   (id, product_id, topic, proposal_id, proposal_ids_js, status,
                     deliberation_js, costs_js, started_at, completed_at)
-                   VALUES (?,?,?,?,?,?,?,?,?)""",
+                   VALUES (?,?,?,?,?,?,?,?,?,?)""",
                 (
                     session_id,
                     product_id,
                     topic,
                     proposal_id,
+                    json.dumps(proposal_ids or ([proposal_id] if proposal_id else [])),
                     status,
                     json.dumps(deliberation),
                     json.dumps(costs),
@@ -159,17 +172,23 @@ class ProposalQueue:
         d = dict(row)
         d["deliberation"] = json.loads(d.pop("deliberation_js") or "[]")
         d["costs"] = json.loads(d.pop("costs_js") or "[]")
+        d["proposal_ids"] = json.loads(d.pop("proposal_ids_js", None) or "[]")
         return d
 
     def list_sessions(self, *, product_id: str) -> list[dict]:
         with self._conn() as conn:
             rows = conn.execute(
-                "SELECT id, product_id, topic, proposal_id, status, "
+                "SELECT id, product_id, topic, proposal_id, proposal_ids_js, status, "
                 "started_at, completed_at FROM sessions "
                 "WHERE product_id = ? ORDER BY started_at DESC",
                 (product_id,),
             ).fetchall()
-        return [dict(r) for r in rows]
+        out = []
+        for r in rows:
+            d = dict(r)
+            d["proposal_ids"] = json.loads(d.pop("proposal_ids_js", None) or "[]")
+            out.append(d)
+        return out
 
     def update_status(
         self,
@@ -220,6 +239,8 @@ class ProposalQueue:
 def _row_to_dict(row: sqlite3.Row) -> dict:
     d = dict(row)
     d["citations"] = json.loads(d.pop("citations_js") or "[]")
+    d["related"] = json.loads(d.pop("related_js", None) or "[]")
+    d["coverage"] = json.loads(d.pop("coverage_js", None) or "{}")
     crit = d.pop("critique_js", None)
     d["adversary_critique"] = json.loads(crit) if crit else None
     delib = d.pop("deliberation_js", None)
@@ -227,3 +248,25 @@ def _row_to_dict(row: sqlite3.Row) -> dict:
     costs = d.pop("costs_js", None)
     d["costs"] = json.loads(costs) if costs else []
     return d
+
+
+def _ensure_columns(conn: sqlite3.Connection) -> None:
+    proposal_cols = {
+        row["name"] for row in conn.execute("PRAGMA table_info(proposals)").fetchall()
+    }
+    for name, ddl in {
+        "tier": "ALTER TABLE proposals ADD COLUMN tier TEXT NOT NULL DEFAULT 'domain'",
+        "parent": "ALTER TABLE proposals ADD COLUMN parent TEXT",
+        "related_js": "ALTER TABLE proposals ADD COLUMN related_js TEXT NOT NULL DEFAULT '[]'",
+        "coverage_js": "ALTER TABLE proposals ADD COLUMN coverage_js TEXT NOT NULL DEFAULT '{}'",
+    }.items():
+        if name not in proposal_cols:
+            conn.execute(ddl)
+
+    session_cols = {
+        row["name"] for row in conn.execute("PRAGMA table_info(sessions)").fetchall()
+    }
+    if "proposal_ids_js" not in session_cols:
+        conn.execute(
+            "ALTER TABLE sessions ADD COLUMN proposal_ids_js TEXT NOT NULL DEFAULT '[]'"
+        )

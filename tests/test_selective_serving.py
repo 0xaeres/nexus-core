@@ -34,6 +34,7 @@ def _skill(
     name: str,
     *,
     product: str = "test",
+    tier: str = "domain",
     files: list[str] | None = None,
     contexts: list[str] | None = None,
     body: str = "",
@@ -41,6 +42,7 @@ def _skill(
     return Skill(
         name=name,
         product=product,
+        tier=tier,
         confidence=0.8,
         applies_to=AppliesTo(files=files or [], contexts=contexts or []),
         provenance=Provenance(
@@ -142,3 +144,28 @@ def test_find_skills_reports_filter_metadata() -> None:
     assert result["filtered_from"] == 2
     assert result["current_file"] == "src/foo.py"
     assert len(result["skills"]) == 1
+
+
+def test_find_skills_includes_master_before_targeted_skills() -> None:
+    master = _skill("test-master", tier="product_master", body="# Master\n\nProduct map.")
+    py = _skill("python-conventions", files=["**/*.py"])
+    state = _state_with_skills([py, master])
+
+    result = asyncio.run(
+        find_skills(state, query="review", current_file="src/foo.py")
+    )
+    assert [s["id"] for s in result["skills"]] == [
+        "test/test-master",
+        "test/python-conventions",
+    ]
+    assert result["skills"][0]["tier"] == "product_master"
+
+
+def test_find_skills_is_product_scoped() -> None:
+    ours = _skill("ours")
+    other = _skill("other", product="other")
+    state = _state_with_skills([ours, other])
+
+    result = asyncio.run(find_skills(state, query="anything"))
+    assert [s["id"] for s in result["skills"]] == ["test/ours"]
+    assert result["filtered_from"] == 1
