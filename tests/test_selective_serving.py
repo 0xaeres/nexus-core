@@ -70,6 +70,7 @@ def test_matches_file_globs_no_current_file_passes() -> None:
 
 def test_matches_file_globs_matches_recursive_glob() -> None:
     assert _matches_file_globs("src/app/main.py", ["**/*.py"]) is True
+    assert _matches_file_globs("main.py", ["**/*.py"]) is True
     assert _matches_file_globs("src/app/main.py", ["**/*.ts"]) is False
 
 

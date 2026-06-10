@@ -521,7 +521,7 @@ uv run nexus-mcp-server --product <your-product-id>
 
 | Name | Purpose |
 |---|---|
-| `find_skills(query, context?, current_file?, top_k=5)` | Rank curated skills relevant to a query. Filters by `applies_to.files` (glob match against `current_file`) and `applies_to.contexts` (exact tag, `"general"` disables the filter). |
+| `find_skills(query, context?, current_file?, top_k=5)` | Rank curated skills relevant to a query. Filters by `applies_to.files` (glob match against `current_file`) and `applies_to.contexts` (exact tag, `"general"` disables the filter). Write file globs as recursive repo-relative patterns such as `**/*.py`, `**/*.ts`, and `**/*.tsx` so Python 3.13 `PurePath.full_match()` and the older fallback keep the same intent. |
 | `get_skill(name)` | Return the full body + frontmatter for a named skill. |
 | `report_outcome(skill_name, succeeded, notes?)` | In-memory outcome log; surfaces in `state._outcomes`. |
 | `query_code_context(symbol, file_glob?)` | Retrieval pipeline in `mode="code"`. |

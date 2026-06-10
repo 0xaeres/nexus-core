@@ -259,6 +259,12 @@ async def corpus_summary(state: ToolState, *, product_id: str) -> dict:
 
 
 def _matches_file_globs(file_path: str | None, globs: list[str]) -> bool:
+    """Match `applies_to.files` globs against a repo-relative path.
+
+    Skill authors should prefer recursive patterns such as `**/*.py`; those
+    preserve the same intent under Python 3.13 `PurePath.full_match()` and the
+    older `PurePath.match()` fallback.
+    """
     if not globs:
         return True
     if file_path is None:
