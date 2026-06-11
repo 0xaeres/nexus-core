@@ -18,7 +18,9 @@ dependencies = [
     "pydantic>=2.9",
     "pydantic-settings>=2.6",
     "pyyaml>=6.0",
+    "pyjwt[crypto]>=2.10",
     "python-dotenv>=1.0",
+    "argon2-cffi>=23.1",
     # Storage
     "qdrant-client>=1.18,<1.19",
     "neo4j>=5.25",

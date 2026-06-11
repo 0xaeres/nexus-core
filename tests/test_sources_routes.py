@@ -57,6 +57,34 @@ def test_add_source_refuses_plaintext_secret_without_key(tmp_path: Path, monkeyp
     assert "NEXUS_TOKEN_KEY is required" in r.json()["detail"]
 
 
+def test_filesystem_source_rejected_in_production(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("NEXUS_ENABLE_LOCAL_FS_SOURCES", "false")
+    registry = Registry(tmp_path / "registry.db")
+    app.dependency_overrides[get_registry] = lambda: registry
+    app.dependency_overrides[get_config_dep] = lambda: _config(tmp_path)
+    try:
+        client = TestClient(app)
+        r = client.post(
+            "/products/demo/sources",
+            json={
+                "name": "local",
+                "type": "filesystem",
+                "config": {"root": str(tmp_path)},
+            },
+        )
+    finally:
+        app.dependency_overrides.pop(get_registry, None)
+        app.dependency_overrides.pop(get_config_dep, None)
+
+    assert r.status_code == 403
+    assert r.json()["detail"] == "filesystem sources are disabled"
+
+
+def test_clone_error_redacts_github_token() -> None:
+    text = "fatal: https://x-access-token:ghp_secret@github.com/acme/api.git failed"
+    assert "ghp_secret" not in sources._redact_text(text)
+
+
 def test_github_repo_urls_validate_all_before_clone() -> None:
     source = {
         "config": {

@@ -8,6 +8,7 @@ council approves them.
 from __future__ import annotations
 
 import logging
+import re
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -79,7 +80,7 @@ async def bootstrap_skills_repo(
         try:
             Repo.clone_from(clone_url, str(workdir))
         except Exception as e:
-            raise BootstrapError(f"clone failed: {e}") from e
+            raise BootstrapError(f"clone failed: {_redact_token(str(e))}") from e
 
     return BootstrapResult(
         skills_repo_url=canonical_url,
@@ -96,3 +97,7 @@ def _authenticated_clone_url(url: str, token: str | None) -> str:
     if not url.startswith("https://"):
         return url
     return url.replace("https://", f"https://x-access-token:{token}@", 1)
+
+
+def _redact_token(text: str) -> str:
+    return re.sub(r"x-access-token:[^@\s]+@", "x-access-token:***@", text)

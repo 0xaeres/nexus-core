@@ -15,6 +15,7 @@ import pytest
 from git import Repo
 
 from nexus.setup import SetupKV, bootstrap_skills_repo
+from nexus.setup.bootstrap import _redact_token
 from nexus.setup.github_api import GitHubAPIError, create_repo
 
 # ---------- SetupKV ---------------------------------------------------------
@@ -85,6 +86,11 @@ def test_create_repo_raises_on_non_2xx() -> None:
     with pytest.raises(GitHubAPIError) as exc:
         asyncio.run(create_repo(token="t", name="x", client=client))
     assert exc.value.status == 422
+
+
+def test_bootstrap_redacts_token_from_clone_errors() -> None:
+    text = "https://x-access-token:ghp_secret@github.com/acme/skills.git failed"
+    assert "ghp_secret" not in _redact_token(text)
 
 
 # ---------- bootstrap orchestrator end-to-end -------------------------------

@@ -40,6 +40,10 @@ CREATE TABLE IF NOT EXISTS proposals (
     created_at    TEXT NOT NULL,
     approved_by   TEXT,
     approved_at   TEXT,
+    skill_path    TEXT,
+    git_committed INTEGER NOT NULL DEFAULT 0,
+    skill_index_status TEXT NOT NULL DEFAULT 'not_started',
+    skill_index_error TEXT NOT NULL DEFAULT '',
     deliberation_js TEXT,
     costs_js      TEXT
 );
@@ -395,6 +399,33 @@ class ProposalQueue:
             )
             return cur.rowcount > 0
 
+    def record_publish_result(
+        self,
+        proposal_id: str,
+        *,
+        skill_path: str,
+        git_committed: bool,
+        skill_index_status: str,
+        skill_index_error: str = "",
+    ) -> bool:
+        with self._conn() as conn:
+            cur = conn.execute(
+                """UPDATE proposals
+                   SET skill_path = ?,
+                       git_committed = ?,
+                       skill_index_status = ?,
+                       skill_index_error = ?
+                   WHERE id = ?""",
+                (
+                    skill_path,
+                    1 if git_committed else 0,
+                    skill_index_status,
+                    skill_index_error,
+                    proposal_id,
+                ),
+            )
+            return cur.rowcount > 0
+
     # ------------------------------------------------------------ read
 
     def get(self, proposal_id: str) -> dict | None:
@@ -511,6 +542,16 @@ def _ensure_columns(conn: sqlite3.Connection) -> None:
         "eval_failures_js": "ALTER TABLE proposals ADD COLUMN eval_failures_js TEXT NOT NULL DEFAULT '[]'",
         "quality_score": "ALTER TABLE proposals ADD COLUMN quality_score REAL NOT NULL DEFAULT 0",
         "signals_used_js": "ALTER TABLE proposals ADD COLUMN signals_used_js TEXT NOT NULL DEFAULT '[]'",
+        "skill_path": "ALTER TABLE proposals ADD COLUMN skill_path TEXT",
+        "git_committed": "ALTER TABLE proposals ADD COLUMN git_committed INTEGER NOT NULL DEFAULT 0",
+        "skill_index_status": (
+            "ALTER TABLE proposals ADD COLUMN "
+            "skill_index_status TEXT NOT NULL DEFAULT 'not_started'"
+        ),
+        "skill_index_error": (
+            "ALTER TABLE proposals ADD COLUMN "
+            "skill_index_error TEXT NOT NULL DEFAULT ''"
+        ),
     }.items():
         if name not in proposal_cols:
             conn.execute(ddl)

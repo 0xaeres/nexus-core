@@ -19,6 +19,10 @@ log = logging.getLogger(__name__)
 _SECRET_KEY_HINTS = ("token", "api_key", "password", "secret")
 
 
+def _now_iso() -> str:
+    return datetime.now(UTC).isoformat()
+
+
 def _get_cipher() -> TokenCipher | None:
     key = os.environ.get("NEXUS_TOKEN_KEY")
     if not key:
@@ -103,6 +107,17 @@ CREATE TABLE IF NOT EXISTS sources (
 CREATE INDEX IF NOT EXISTS idx_sources_product
     ON sources(product_id);
 
+CREATE TABLE IF NOT EXISTS product_members (
+    product_id  TEXT NOT NULL,
+    user_id     TEXT NOT NULL,
+    role        TEXT NOT NULL,
+    created_at  TEXT NOT NULL,
+    PRIMARY KEY (product_id, user_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_product_members_user
+    ON product_members(user_id, product_id);
+
 CREATE TABLE IF NOT EXISTS source_resources (
     product_id        TEXT NOT NULL,
     source_key        TEXT NOT NULL,
@@ -170,6 +185,7 @@ class Registry:
         with self._conn() as conn:
             conn.executescript(_SCHEMA)
             _ensure_registry_columns(conn)
+            _backfill_product_members(conn)
         self._seed_defaults()
 
     @contextmanager
@@ -255,6 +271,29 @@ def _ensure_registry_columns(conn: sqlite3.Connection) -> None:
             "ALTER TABLE source_resources "
             "ADD COLUMN enrichment_status TEXT NOT NULL DEFAULT ''"
         )
+
+
+def _backfill_product_members(conn: sqlite3.Connection) -> None:
+    rows = conn.execute("SELECT id, products_js FROM users").fetchall()
+    now = _now_iso()
+    for row in rows:
+        try:
+            products = json.loads(row["products_js"] or "[]")
+        except json.JSONDecodeError:
+            continue
+        for entry in products:
+            product_id = entry.get("id") if isinstance(entry, dict) else entry
+            role = entry.get("role", "owner") if isinstance(entry, dict) else "owner"
+            if not product_id:
+                continue
+            if role not in {"owner", "editor", "viewer"}:
+                role = "owner"
+            conn.execute(
+                """INSERT OR IGNORE INTO product_members
+                   (product_id, user_id, role, created_at)
+                   VALUES (?,?,?,?)""",
+                (str(product_id), row["id"], role, now),
+            )
 
 
 def _row_to_product(row: sqlite3.Row) -> dict:
@@ -354,19 +393,63 @@ def add_source_methods(cls):
                     "SELECT COUNT(*) FROM products WHERE id = ?",
                     (product_id,),
                 ).fetchone()[0],
+                "product_members": conn.execute(
+                    "SELECT COUNT(*) FROM product_members WHERE product_id = ?",
+                    (product_id,),
+                ).fetchone()[0],
             }
             conn.execute("DELETE FROM source_resources WHERE product_id = ?", (product_id,))
             conn.execute("DELETE FROM source_sync_runs WHERE product_id = ?", (product_id,))
             conn.execute("DELETE FROM enrichment_jobs WHERE product_id = ?", (product_id,))
             conn.execute("DELETE FROM sources WHERE product_id = ?", (product_id,))
+            conn.execute("DELETE FROM product_members WHERE product_id = ?", (product_id,))
             conn.execute("DELETE FROM products WHERE id = ?", (product_id,))
         return counts
+
+    def grant_product_role(self, product_id: str, user_id: str, role: str) -> None:
+        if role not in {"owner", "editor", "viewer"}:
+            raise ValueError(f"unsupported product role: {role}")
+        with self._conn() as conn:
+            conn.execute(
+                """INSERT INTO product_members (product_id, user_id, role, created_at)
+                   VALUES (?,?,?,?)
+                   ON CONFLICT(product_id, user_id) DO UPDATE SET role = excluded.role""",
+                (product_id, user_id, role, _now_iso()),
+            )
+
+    def get_product_role(self, product_id: str, user_id: str) -> str | None:
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT role FROM product_members WHERE product_id = ? AND user_id = ?",
+                (product_id, user_id),
+            ).fetchone()
+        return str(row["role"]) if row else None
+
+    def list_product_ids_for_user(self, user_id: str) -> list[str]:
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT product_id FROM product_members WHERE user_id = ? ORDER BY product_id",
+                (user_id,),
+            ).fetchall()
+        return [str(r["product_id"]) for r in rows]
+
+    def list_product_memberships(self, user_id: str) -> dict[str, str]:
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT product_id, role FROM product_members WHERE user_id = ?",
+                (user_id,),
+            ).fetchall()
+        return {str(r["product_id"]): str(r["role"]) for r in rows}
 
     cls.list_sources = list_sources
     cls.get_source = get_source
     cls.upsert_source = upsert_source
     cls.delete_source = delete_source
     cls.delete_product = delete_product
+    cls.grant_product_role = grant_product_role
+    cls.get_product_role = get_product_role
+    cls.list_product_ids_for_user = list_product_ids_for_user
+    cls.list_product_memberships = list_product_memberships
     return cls
 
 

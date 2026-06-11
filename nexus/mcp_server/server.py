@@ -105,7 +105,6 @@ def _build_server(*, product: str, config: NexusConfig) -> Server:
                     "type": "object",
                     "properties": {
                         "query": {"type": "string"},
-                        "product_id": {"type": "string"},
                         "top_k": {"type": "integer", "default": 5},
                     },
                     "required": ["query"],

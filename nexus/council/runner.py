@@ -104,6 +104,18 @@ async def kick_off(
 ) -> str:
     """Schedule a council run as an asyncio task. Returns the session_id."""
     sid = session_id or make_session_id()
+    queue.record_session(
+        session_id=sid,
+        product_id=product_id,
+        topic=topic,
+        proposal_id=None,
+        proposal_ids=[],
+        deliberation=[],
+        costs=[],
+        started_at=datetime.now(UTC).isoformat(),
+        completed_at="",
+        status="running",
+    )
     await HUB.start(sid)
     task = asyncio.create_task(
         _run_session(
@@ -158,7 +170,11 @@ async def _run_session(
             await HUB.publish(session_id, {"event": "llm_token", "data": token})
 
         async with (
-            council_handles(config, token_sink=token_sink) as handles,
+            council_handles(
+                config,
+                token_sink=token_sink,
+                trace_context={"session_id": session_id, "product_id": product_id},
+            ) as handles,
             open_checkpointer(config.storage.council_checkpoint) as saver,
         ):
             graph = build_graph(config, handles)

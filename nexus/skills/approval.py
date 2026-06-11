@@ -1,4 +1,4 @@
-"""Proposal approval flow: queue row -> Skill model -> .skill.md -> git -> Qdrant.
+"""Proposal approval flow: queue row -> Skill model -> SKILL.md -> git -> Qdrant.
 
 One async function `approve_proposal` is the source of truth. The API and CLI
 both call it. Idempotent within a session (re-approving an already-approved
@@ -10,6 +10,7 @@ from __future__ import annotations
 import logging
 import re
 import textwrap
+from contextlib import suppress
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -28,6 +29,10 @@ DOC_LINE_WIDTH = 100
 
 
 class ApprovalError(RuntimeError):
+    pass
+
+
+class ApprovalPublishError(ApprovalError):
     pass
 
 
@@ -50,19 +55,46 @@ async def approve_proposal(
 
     skill = _row_to_skill(row, actor=actor)
     store = SkillStore(_resolve_root(config.hierarchy_root))
+    rel = SkillStore.relative_path_for(skill)
+    target = store.root / rel
+    previous = target.read_text(encoding="utf-8") if target.exists() else None
     path = store.save(skill)
     log.info("approval: wrote %s", path)
 
-    pushed = commit_and_push(
+    publish = commit_and_push(
         store.root,
         message=f"skill: {skill.name} approved by {actor}",
         push=True,
     )
+    if not publish.committed or not publish.pushed:
+        if previous is None:
+            path.unlink(missing_ok=True)
+            if path.name == "SKILL.md":
+                with suppress(OSError):
+                    path.parent.rmdir()
+        else:
+            path.write_text(previous, encoding="utf-8")
+        detail = f": {publish.error}" if publish.error else ""
+        raise ApprovalPublishError(
+            "skill file was written, but Git commit/push did not complete; "
+            f"proposal remains pending{detail}"
+        )
 
     chunks_indexed = await _embed_skill_body(
         skill, source_uri=str(path), config=config
     )
+    index_status = "indexed" if chunks_indexed > 0 else "pending"
 
+    relative_path = rel
+    queue.record_publish_result(
+        proposal_id,
+        skill_path=relative_path,
+        git_committed=publish.committed,
+        skill_index_status=index_status,
+        skill_index_error=(
+            "" if chunks_indexed > 0 else "approved skill was not embedded; retry indexing"
+        ),
+    )
     queue.update_status(proposal_id, status="approved", actor=actor)
     queue.record_skill_signal(
         product_id=skill.product,
@@ -76,9 +108,10 @@ async def approve_proposal(
     return {
         "ok": True,
         "skill_id": skill.id,
-        "path": str(path),
-        "git_committed": pushed,
+        "path": relative_path,
+        "git_committed": publish.committed,
         "chunks_indexed": chunks_indexed,
+        "skill_index_status": index_status,
     }
 
 

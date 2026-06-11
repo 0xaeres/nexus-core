@@ -2,14 +2,16 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Body, Depends, HTTPException
+from fastapi import APIRouter, Body, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
-from nexus.api.deps import get_config_dep, get_proposal_queue
+from nexus.api.authz import assert_product_access, filter_products_for_user, rate_limit
+from nexus.api.deps import get_config_dep, get_proposal_queue, get_registry
 from nexus.config import NexusConfig
 from nexus.council.queue import ProposalQueue
 from nexus.council.runner import kick_off
-from nexus.skills.approval import ApprovalError, approve_proposal
+from nexus.registry import Registry
+from nexus.skills.approval import ApprovalError, ApprovalPublishError, approve_proposal
 
 router = APIRouter(prefix="/proposals", tags=["proposals"])
 
@@ -33,36 +35,60 @@ class ReviseProposalRequest(BaseModel):
 
 @router.get("")
 async def list_proposals(
+    request: Request,
     queue: ProposalQueue = Depends(get_proposal_queue),
+    registry: Registry = Depends(get_registry),
     status_filter: str | None = "pending",
     product_id: str | None = None,
 ) -> dict:
+    if product_id:
+        assert_product_access(request, registry, product_id)
+        allowed_product_id = product_id
+    else:
+        allowed = {p["id"] for p in filter_products_for_user(request, registry, registry.list_products())}
+        allowed_product_id = None
+    proposals = queue.list(status=status_filter, product_id=allowed_product_id)
+    if not product_id:
+        proposals = [p for p in proposals if p.get("product_id") in allowed]
     return {
-        "proposals": queue.list(status=status_filter, product_id=product_id)
+        "proposals": proposals
     }
 
 
 @router.get("/{proposal_id}")
 async def get_proposal(
-    proposal_id: str, queue: ProposalQueue = Depends(get_proposal_queue)
+    proposal_id: str,
+    request: Request,
+    queue: ProposalQueue = Depends(get_proposal_queue),
+    registry: Registry = Depends(get_registry),
 ) -> dict:
     p = queue.get(proposal_id)
     if not p:
         raise HTTPException(status_code=404, detail="proposal not found")
+    assert_product_access(request, registry, p["product_id"])
     return p
 
 
 @router.post("/{proposal_id}/approve")
 async def approve(
     proposal_id: str,
+    request: Request,
     actor: str = Body(..., embed=True),
     queue: ProposalQueue = Depends(get_proposal_queue),
     config: NexusConfig = Depends(get_config_dep),
+    registry: Registry = Depends(get_registry),
 ) -> dict:
+    proposal = queue.get(proposal_id)
+    if not proposal:
+        raise HTTPException(status_code=404, detail="proposal not found")
+    assert_product_access(request, registry, proposal["product_id"], action="approve")
+    rate_limit(request, bucket="proposal_approve", limit=60, window_s=86400)
     try:
         return await approve_proposal(
             proposal_id=proposal_id, actor=actor, config=config, queue=queue
         )
+    except ApprovalPublishError as e:
+        raise HTTPException(status_code=502, detail=str(e)) from e
     except ApprovalError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
 
@@ -70,13 +96,16 @@ async def approve(
 @router.post("/{proposal_id}/edit")
 async def edit_proposal(
     proposal_id: str,
+    request: Request,
     body: str = Body(..., embed=True),
     actor: str = Body(..., embed=True),
     queue: ProposalQueue = Depends(get_proposal_queue),
+    registry: Registry = Depends(get_registry),
 ) -> dict:
     proposal = queue.get(proposal_id)
     if not proposal:
         raise HTTPException(status_code=404, detail="proposal not found")
+    assert_product_access(request, registry, proposal["product_id"], action="approve")
     if not queue.update_status(proposal_id, status="edited", actor=actor, body=body):
         raise HTTPException(status_code=404, detail="proposal not found")
     queue.record_skill_signal(
@@ -94,12 +123,15 @@ async def edit_proposal(
 @router.post("/{proposal_id}/reject")
 async def reject_proposal(
     proposal_id: str,
+    request: Request,
     body: RejectProposalRequest,
     queue: ProposalQueue = Depends(get_proposal_queue),
+    registry: Registry = Depends(get_registry),
 ) -> dict:
     proposal = queue.get(proposal_id)
     if not proposal:
         raise HTTPException(status_code=404, detail="proposal not found")
+    assert_product_access(request, registry, proposal["product_id"], action="approve")
     if not queue.update_status(proposal_id, status="rejected", actor=None):
         raise HTTPException(status_code=404, detail="proposal not found")
     queue.record_skill_signal(
@@ -117,13 +149,16 @@ async def reject_proposal(
 @router.post("/{proposal_id}/revise")
 async def revise_proposal(
     proposal_id: str,
+    request: Request,
     body: ReviseProposalRequest,
     queue: ProposalQueue = Depends(get_proposal_queue),
     config: NexusConfig = Depends(get_config_dep),
+    registry: Registry = Depends(get_registry),
 ) -> dict:
     proposal = queue.get(proposal_id)
     if not proposal:
         raise HTTPException(status_code=404, detail="proposal not found")
+    assert_product_access(request, registry, proposal["product_id"], action="approve")
     if proposal.get("status") != "pending":
         raise HTTPException(status_code=409, detail="proposal is not pending")
 

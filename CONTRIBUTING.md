@@ -371,6 +371,8 @@ uv run ruff check nexus tests           # must be clean
 uv run pytest -q                        # unit + integration
 uv run pytest -m eval                   # opt-in retrieval benchmark
                                         #   (skips if Qdrant/embedder/reranker absent)
+uv run python -m evals.run_ragas        # RAGAS-style golden eval
+uv run python -m evals.run_code_eval    # manual code retrieval eval
 make test-live-e2e                      # live Qdrant E2E
 ```
 
@@ -477,7 +479,7 @@ output shape (citations, completeness gate).
 
 ## 9. Testing
 
-Three tiers.
+Four tiers plus one CI-only regression gate.
 
 **Unit tests** (`tests/test_*.py`) — pure logic. Run `uv run pytest -q`.
 Should pass in seconds, no external infra.
@@ -489,6 +491,17 @@ FastAPI routes with `dependency_overrides`. Still no live infra.
 a populated Qdrant index + reachable embedder + reranker. The pytest
 wrapper probes infra and `pytest.skip`s cleanly when anything's down so
 the marker is safe to leave in CI behind a conditional.
+
+**RAGAS-style golden eval** (`evals/run_ragas.py`) — runs retrieval over
+`evals/golden.jsonl`, synthesizes short answers from retrieved contexts, and
+uses the configured council model as a judge. Gates are faithfulness `>= 0.85`,
+answer relevancy `>= 0.80`, and context recall `>= 0.75`. CI runs this in the
+`ragas-regression` job when `DEEPINFRA_API_KEY` is configured, with `--limit 10`
+against the seed Forge skills, and uploads `evals/ci_ragas.json`.
+
+**Code retrieval eval** (`evals/run_code_eval.py`) — manual golden-set runner
+for nDCG@10 `>= 0.75`, Recall@10 `>= 0.80`, and pairwise preference accuracy
+`>= 0.85` when a golden item supplies an `anti_answer`. It is not wired into CI.
 
 ### Conventions
 

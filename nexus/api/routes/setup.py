@@ -11,8 +11,9 @@ import logging
 import os
 from typing import Literal
 
-from fastapi import APIRouter, Body, Depends, HTTPException
+from fastapi import APIRouter, Body, Depends, HTTPException, Request
 
+from nexus.api.authz import require_admin
 from nexus.api.deps import get_setup_kv, resolve_skills_repo_url
 from nexus.setup import BootstrapError, SetupKV, bootstrap_skills_repo
 
@@ -38,12 +39,14 @@ async def setup_status(kv: SetupKV = Depends(get_setup_kv)) -> dict:
 
 @router.post("/skills-repo")
 async def setup_skills_repo(
+    request: Request,
     mode: Literal["create", "existing"] = Body(..., embed=True),
     github_org: str | None = Body(None, embed=True),
     repo_name: str = Body("nexus-skills", embed=True),
     existing_repo_url: str | None = Body(None, embed=True),
     kv: SetupKV = Depends(get_setup_kv),
 ) -> dict:
+    require_admin(request)
     token = os.environ.get("GITHUB_TOKEN") or ""
     if mode == "create" and not token:
         raise HTTPException(

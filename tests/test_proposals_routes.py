@@ -6,10 +6,11 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 from nexus.api.app import app
-from nexus.api.deps import get_config_dep, get_proposal_queue
+from nexus.api.deps import get_config_dep, get_proposal_queue, get_registry
 from nexus.api.routes import proposals
 from nexus.config import NexusConfig
 from nexus.council.queue import ProposalQueue
+from nexus.registry import Registry
 from nexus.skills.models import Citation, SkillProposal
 
 
@@ -41,9 +42,11 @@ def _proposal() -> SkillProposal:
 
 def test_reject_accepts_json_body(tmp_path: Path) -> None:
     queue = ProposalQueue(tmp_path / "proposals.db")
+    registry = Registry(tmp_path / "registry.db")
     proposal = _proposal()
     queue.enqueue(proposal, session_id="cs_demo", product_id="demo")
     app.dependency_overrides[get_proposal_queue] = lambda: queue
+    app.dependency_overrides[get_registry] = lambda: registry
     try:
         client = TestClient(app)
         res = client.post(
@@ -52,6 +55,7 @@ def test_reject_accepts_json_body(tmp_path: Path) -> None:
         )
     finally:
         app.dependency_overrides.pop(get_proposal_queue, None)
+        app.dependency_overrides.pop(get_registry, None)
 
     assert res.status_code == 200
     assert res.json() == {
@@ -67,14 +71,17 @@ def test_reject_accepts_json_body(tmp_path: Path) -> None:
 
 def test_reject_requires_reason(tmp_path: Path) -> None:
     queue = ProposalQueue(tmp_path / "proposals.db")
+    registry = Registry(tmp_path / "registry.db")
     proposal = _proposal()
     queue.enqueue(proposal, session_id="cs_demo", product_id="demo")
     app.dependency_overrides[get_proposal_queue] = lambda: queue
+    app.dependency_overrides[get_registry] = lambda: registry
     try:
         client = TestClient(app)
         res = client.post(f"/proposals/{proposal.id}/reject", json={})
     finally:
         app.dependency_overrides.pop(get_proposal_queue, None)
+        app.dependency_overrides.pop(get_registry, None)
 
     assert res.status_code == 422
     row = queue.get(proposal.id)
@@ -84,6 +91,7 @@ def test_reject_requires_reason(tmp_path: Path) -> None:
 
 def test_revise_starts_council_with_feedback(tmp_path: Path, monkeypatch) -> None:
     queue = ProposalQueue(tmp_path / "proposals.db")
+    registry = Registry(tmp_path / "registry.db")
     proposal = _proposal()
     queue.enqueue(proposal, session_id="cs_demo", product_id="demo")
     seen: dict[str, str] = {}
@@ -95,6 +103,7 @@ def test_revise_starts_council_with_feedback(tmp_path: Path, monkeypatch) -> Non
 
     monkeypatch.setattr(proposals, "kick_off", fake_kick_off)
     app.dependency_overrides[get_proposal_queue] = lambda: queue
+    app.dependency_overrides[get_registry] = lambda: registry
     app.dependency_overrides[get_config_dep] = lambda: _config(tmp_path)
     try:
         client = TestClient(app)
@@ -107,6 +116,7 @@ def test_revise_starts_council_with_feedback(tmp_path: Path, monkeypatch) -> Non
         )
     finally:
         app.dependency_overrides.pop(get_proposal_queue, None)
+        app.dependency_overrides.pop(get_registry, None)
         app.dependency_overrides.pop(get_config_dep, None)
 
     assert res.status_code == 200

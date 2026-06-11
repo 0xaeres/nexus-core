@@ -1,0 +1,65 @@
+skills_repo: ${NEXUS_SKILLS_REPO}
+hierarchy_root: /var/lib/nexus/skills
+
+connectors: []
+
+vector_store:
+  url: http://qdrant:6333
+  timeout_s: 120
+  upsert_batch_size: 16
+  collections:
+    code: nexus_code
+    text: nexus_text
+  quantization:
+    enabled: true
+    type: turboquant
+    bits: bits4
+    always_ram: true
+
+models:
+  council:
+    provider: deepinfra
+    model: deepseek-ai/DeepSeek-V3
+    api_key: ${DEEPINFRA_API_KEY}
+    base_url: https://api.deepinfra.com/v1/openai
+    temperature: 0.0
+  light:
+    provider: deepinfra
+    model: google/gemma-4-26B-A4B-it
+    api_key: ${DEEPINFRA_API_KEY}
+    base_url: https://api.deepinfra.com/v1/openai
+  embedding:
+    provider: deepinfra
+    model: Qwen/Qwen3-Embedding-4B
+    api_key: ${DEEPINFRA_API_KEY}
+    base_url: https://api.deepinfra.com/v1/openai
+    dim: 2560
+    instruction_profile: qwen3
+  reranker:
+    provider: deepinfra
+    model: Qwen/Qwen3-Reranker-4B
+    api_key: ${DEEPINFRA_API_KEY}
+    base_url: https://api.deepinfra.com/v1/inference
+
+ingestion:
+  enrich_chunks:
+    docs: false
+    code: false
+  embed_batch_size: 32
+  quality_gate_threshold: 0.0
+  file_batch_size: 50
+  read_concurrency: 10
+  batch_concurrency: 2
+  enricher_concurrency: 4
+  enrichment_worker:
+    enabled: false
+    poll_interval_s: 5.0
+    max_attempts: 3
+
+server:
+  host: 0.0.0.0
+  port: 8000
+
+storage:
+  proposal_queue: /var/lib/nexus/data/proposals.db
+  council_checkpoint: /var/lib/nexus/data/council.sqlite

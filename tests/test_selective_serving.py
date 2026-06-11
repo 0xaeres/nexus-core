@@ -13,7 +13,9 @@ from nexus.mcp_server.tools import (
     ToolState,
     _matches_context,
     _matches_file_globs,
+    corpus_summary,
     find_skills,
+    hybrid_search_corpus,
     report_outcome,
 )
 from nexus.skills.models import AppliesTo, Provenance, Skill
@@ -220,3 +222,20 @@ def test_report_outcome_persists_skill_signal(tmp_path) -> None:
     assert signals[0]["skill_name"] == "test-master"
     assert signals[0]["text"] == "Skill missed tenancy rules."
     assert signals[0]["metadata"]["succeeded"] is False
+
+
+def test_hybrid_search_rejects_cross_product_override() -> None:
+    state = _state_with_skills([])
+    result = asyncio.run(
+        hybrid_search_corpus(state, query="auth", product_id="other")
+    )
+    assert result == {"error": "cross-product corpus search is not allowed"}
+
+
+def test_corpus_summary_rejects_cross_product_resource() -> None:
+    state = _state_with_skills([])
+    result = asyncio.run(corpus_summary(state, product_id="other"))
+    assert result == {
+        "product_id": "other",
+        "error": "cross-product corpus access is not allowed",
+    }

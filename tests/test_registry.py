@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sqlite3
 from pathlib import Path
 
 import pytest
@@ -19,6 +20,21 @@ def test_registry_seed_defaults(registry: Registry) -> None:
     assert user is not None
     assert user["name"] == "Admin"
     assert user["role"] == "org_admin"
+
+
+def test_registry_backfills_legacy_user_products(tmp_path: Path) -> None:
+    db = tmp_path / "registry.db"
+    registry = Registry(db)
+    with sqlite3.connect(db) as conn:
+        conn.execute(
+            "INSERT INTO users (id, name, role, products_js) VALUES (?,?,?,?)",
+            ("u1", "User", "viewer", '["prod-a"]'),
+        )
+
+    registry = Registry(db)
+
+    assert registry.list_product_ids_for_user("u1") == ["prod-a"]
+    assert registry.list_product_memberships("u1") == {"prod-a": "owner"}
 
 
 def test_registry_products(registry: Registry) -> None:

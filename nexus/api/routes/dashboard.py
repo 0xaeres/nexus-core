@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 
-from nexus.api.deps import get_proposal_queue, get_skill_store
+from nexus.api.authz import assert_product_access
+from nexus.api.deps import get_proposal_queue, get_registry, get_skill_store
 from nexus.council.queue import ProposalQueue
+from nexus.registry import Registry
 from nexus.skills.store import SkillStore
 
 router = APIRouter(tags=["dashboard"])
@@ -14,9 +16,12 @@ router = APIRouter(tags=["dashboard"])
 @router.get("/products/{product_id}/dashboard")
 async def dashboard(
     product_id: str,
+    request: Request,
+    registry: Registry = Depends(get_registry),
     queue: ProposalQueue = Depends(get_proposal_queue),
     store: SkillStore = Depends(get_skill_store),
 ) -> dict:
+    assert_product_access(request, registry, product_id)
     sessions = queue.list_sessions(product_id=product_id)
     pending = queue.list(status="pending", product_id=product_id)
     skills = [s for s in store.iter_skills() if s.product == product_id]

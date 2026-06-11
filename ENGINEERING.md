@@ -733,10 +733,20 @@ background enrichment when enabled.
 `${VAR}` substitution is performed at load time
 (`nexus/config.py::_expand_env`).
 
-## 10. Eval Set (`tests/eval/`)
+## 10. Eval Strategy
+
+Nexus has three eval surfaces:
+
+| Surface | Runner | Scope | CI status |
+|---|---|---|---|
+| Retrieval quality | `pytest -m eval` / `python -m tests.eval.harness` | Production dense + BM25 → RRF → rerank over `tests/eval/queries.json` | Opt-in; skips when Qdrant/embedder/reranker are absent |
+| RAGAS-style golden eval | `python -m evals.run_ragas` | Golden skill queries over `evals/golden.jsonl`; LLM-judged faithfulness and answer quality | CI `ragas-regression` job when `DEEPINFRA_API_KEY` is configured |
+| Code retrieval eval | `python -m evals.run_code_eval` | Golden-set nDCG/recall and pairwise answer preference | Manual, not wired into CI |
+
+### Retrieval Eval (`tests/eval/`)
 
 `tests/eval/queries.json` is the authoritative measure of retrieval
-quality. 40 hand-curated queries against this codebase itself, one per
+quality. 41 hand-curated queries against this codebase itself, one per
 major module. Each entry:
 
 ```json
@@ -775,6 +785,54 @@ rerank, or repo map.
 
 Qdrant with native TurboQuant is the only vector-index path. Eval compares the
 current stack against the floors in `queries.json._meta`.
+
+### RAGAS-Style Golden Eval (`evals/run_ragas.py`)
+
+This runner uses `evals/golden.jsonl` skill questions. For each query, it:
+
+1. Retrieves the top 8 contexts through the production retrieval pipeline.
+2. Synthesizes a 2-4 sentence answer using only retrieved contexts.
+3. Uses the configured council model as a strict JSON judge for faithfulness
+   and answer relevancy.
+4. Computes context recall by checking whether expected file names appear in
+   retrieved hit URIs.
+
+Aggregates are simple means over the evaluated items:
+
+```
+faithfulness      >= 0.85
+answer_relevancy  >= 0.80
+context_recall    >= 0.75
+```
+
+The runner is RAGAS-style, but does not import `ragas`; the in-house prompts
+avoid dependency and prompt-template churn. In CI, `.github/workflows/ci.yml`
+runs this as `ragas-regression` only when `DEEPINFRA_API_KEY` is configured:
+Qdrant starts as a service, the seed Forge skills are ingested, the runner uses
+`--limit 10`, and `evals/ci_ragas.json` is uploaded as an artifact. If
+`evals/baseline_faithfulness.txt` exists, CI also fails when faithfulness drops
+by more than `0.05` from that baseline.
+
+### Code Retrieval Eval (`evals/run_code_eval.py`)
+
+This manual runner uses the same golden set and retrieves top 10 contexts. It
+reports:
+
+- **nDCG@10** — ranking quality for expected files in the retrieved list.
+- **Recall@10** — expected-file coverage in the top 10.
+- **Pairwise preference accuracy** — for items with an `anti_answer`, the judge
+  chooses between the expected answer and anti-answer using retrieved contexts.
+
+Current gates:
+
+```
+nDCG@10                      >= 0.75
+Recall@10                    >= 0.80
+pairwise_preference_accuracy >= 0.85
+```
+
+This runner is not part of CI today; use it manually when changing code-focused
+retrieval behavior or expanding `evals/golden.jsonl`.
 
 ## 11. Storage
 

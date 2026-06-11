@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import shutil
 import tempfile
 from collections.abc import AsyncIterator, Callable
@@ -20,10 +21,11 @@ from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 
-from fastapi import APIRouter, Body, Depends, HTTPException
+from fastapi import APIRouter, Body, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from git import Repo
 
+from nexus.api.authz import assert_product_access, local_fs_enabled, rate_limit
 from nexus.api.deps import get_config_dep, get_registry
 from nexus.auth.token_cipher import TokenCipherError
 from nexus.config import NexusConfig
@@ -76,9 +78,11 @@ def _config_sources(config: NexusConfig, product_id: str) -> list[dict]:
 @router.get("")
 async def list_sources(
     product_id: str,
+    request: Request,
     config: NexusConfig = Depends(get_config_dep),
     registry: Registry = Depends(get_registry),
 ) -> dict:
+    assert_product_access(request, registry, product_id)
     by_name = {s["name"]: s for s in _config_sources(config, product_id)}
     for s in registry.list_sources(product_id):
         s["config"] = _redact(s.get("config") or {})
@@ -93,9 +97,11 @@ async def list_sources(
 async def get_source(
     source_id: str,
     product_id: str,
+    request: Request,
     config: NexusConfig = Depends(get_config_dep),
     registry: Registry = Depends(get_registry),
 ) -> dict:
+    assert_product_access(request, registry, product_id)
     runtime = registry.get_source(product_id, source_id)
     if runtime:
         runtime["config"] = _redact(runtime.get("config") or {})
@@ -111,11 +117,15 @@ async def get_source(
 @router.post("")
 async def add_source(
     product_id: str,
+    request: Request,
     name: str = Body(..., embed=True),
     type: str = Body(..., embed=True),
     config_block: dict = Body(default_factory=dict, embed=True, alias="config"),
     registry: Registry = Depends(get_registry),
 ) -> dict:
+    assert_product_access(request, registry, product_id, action="source")
+    if type in {"filesystem", "local_fs"} and not local_fs_enabled():
+        raise HTTPException(status_code=403, detail="filesystem sources are disabled")
     if registry.get_source(product_id, name):
         raise HTTPException(status_code=409, detail=f"source {name!r} already exists")
     try:
@@ -138,8 +148,12 @@ async def add_source(
 
 @router.delete("/{source_id}")
 async def delete_source(
-    product_id: str, source_id: str, registry: Registry = Depends(get_registry)
+    product_id: str,
+    source_id: str,
+    request: Request,
+    registry: Registry = Depends(get_registry),
 ) -> dict:
+    assert_product_access(request, registry, product_id, action="source")
     if not registry.delete_source(product_id, source_id):
         raise HTTPException(status_code=404, detail="source not found in registry")
     return {"ok": True}
@@ -149,15 +163,21 @@ async def delete_source(
 async def sync_source(
     product_id: str,
     source_id: str,
+    request: Request = None,  # type: ignore[assignment]
     config: NexusConfig = Depends(get_config_dep),
     registry: Registry = Depends(get_registry),
 ) -> dict:
+    if request is not None:
+        assert_product_access(request, registry, product_id, action="source")
+        rate_limit(request, bucket="source_sync", limit=60, window_s=86400)
     runtime = registry.get_source(product_id, source_id)
     config_sources = {s["name"]: s for s in _config_sources(config, product_id)}
     if not runtime and source_id not in config_sources:
         raise HTTPException(status_code=404, detail="source not found")
 
     source = runtime or config_sources[source_id]
+    if source.get("type") in {"filesystem", "local_fs"} and not local_fs_enabled():
+        raise HTTPException(status_code=403, detail="filesystem sources are disabled")
     key = f"{product_id}:{source_id}"
     existing = _sync_tasks.get(key)
     if existing and not existing.done():
@@ -294,6 +314,9 @@ async def _sync_source_contents(
             roots = await _clone_github_repos(source, q)
             cleanup_dirs.extend(cleanup for _, _, cleanup in roots)
         elif src_type in ("filesystem", "local_fs"):
+            if not local_fs_enabled():
+                await _emit(q, "error", "filesystem sources are disabled")
+                return
             roots = source.get("config", {}).get("roots") or [
                 source.get("config", {}).get("root")
             ]
@@ -402,7 +425,7 @@ async def _sync_source_contents(
         log.exception(
             "sync_source failed for product=%s source=%s", product_id, source.get("name")
         )
-        await _emit(q, "error", f"Ingest failed: {type(e).__name__}: {e}")
+        await _emit(q, "error", f"Ingest failed: {type(e).__name__}: {_redact_text(str(e))}")
         if runtime:
             try:
                 registry.upsert_source({**runtime, "status": "error"})
@@ -539,6 +562,10 @@ def _github_repo_urls(source: dict) -> list[str]:
     return urls
 
 
+def _redact_text(text: str) -> str:
+    return re.sub(r"x-access-token:[^@\s]+@", "x-access-token:***@", text)
+
+
 async def _clone_github_repos(
     source: dict, q: asyncio.Queue
 ) -> list[tuple[str, Path, Path]]:
@@ -570,7 +597,7 @@ async def _clone_github_repo(
         )
     except Exception as e:
         shutil.rmtree(str(tmp), ignore_errors=True)
-        raise RuntimeError(f"git clone failed: {e}") from e
+        raise RuntimeError(f"git clone failed: {_redact_text(str(e))}") from e
 
     await _emit(q, "info", "Clone complete")
     return clone_path, tmp
@@ -589,9 +616,11 @@ def _repo_label_for_path(label: str) -> str:
 async def source_log_stream(
     product_id: str,
     source_id: str,
+    request: Request,
     config: NexusConfig = Depends(get_config_dep),
     registry: Registry = Depends(get_registry),
 ) -> StreamingResponse:
+    assert_product_access(request, registry, product_id)
     runtime = registry.get_source(product_id, source_id)
     config_sources = {s["name"]: s for s in _config_sources(config, product_id)}
     if not runtime and source_id not in config_sources:

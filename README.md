@@ -184,6 +184,34 @@ you to `/setup` — a one-time wizard that either creates a new GitHub repo or
 attaches to one you already own. The repo is initialised empty; skill files
 land as the council approves them.
 
+### Deploy: Oracle VM + Vercel
+
+Full runbook: [`docs/DEPLOYMENT.md`](./docs/DEPLOYMENT.md).
+
+Backend production shape is one Oracle VM running Docker Compose:
+
+```bash
+cp nexus.prod.yaml.example nexus.yaml
+cp .env.example .env
+# fill DEEPINFRA_API_KEY, NEXUS_TOKEN_KEY, NEXUS_SECRET_KEY,
+# NEXUS_ADMIN_API_KEY, NEXUS_BOOTSTRAP_ADMIN_EMAIL/PASSWORD,
+# NEXUS_ALLOWED_ORIGINS=https://<your-vercel-app>, and NEXUS_API_DOMAIN
+docker compose -f docker-compose.prod.yml up -d --build
+```
+
+Only Caddy exposes `80/443`; Qdrant stays on the private Compose network. The
+API is protected when `NEXUS_SECRET_KEY` is set. Browser sessions use secure
+HttpOnly cookies plus CSRF headers, and the bootstrap admin is created from
+env on first boot. Vercel needs:
+
+```bash
+NEXT_PUBLIC_NEXUS_API=https://<NEXUS_API_DOMAIN>
+```
+
+Langfuse tracing is enabled when `LANGFUSE_PUBLIC_KEY` and
+`LANGFUSE_SECRET_KEY` are set. Prompt/response capture is off by default via
+`NEXUS_TRACE_CONTENT=false`.
+
 ---
 
 ## End-to-end flow
@@ -292,7 +320,7 @@ nexus/
 │   ├── daemon.py      Continuous index daemon
 │   └── config.py      nexus.yaml loader
 ├── tests/             unit + integration tests
-├── tests/eval/        40-query retrieval benchmark (recall@10 + MRR)
+├── tests/eval/        41-query retrieval benchmark (recall@10 + MRR)
 └── docker-compose.yml
 ```
 
@@ -304,6 +332,8 @@ nexus/
 uv run ruff check nexus tests
 uv run pytest -q                       # unit + integration tests
 uv run pytest -m eval                  # opt-in retrieval benchmark
+uv run python -m evals.run_ragas       # RAGAS-style golden eval
+uv run python -m evals.run_code_eval   # manual code retrieval eval
 make test-live-e2e                     # live Qdrant E2E
 ```
 
@@ -312,6 +342,13 @@ retrieval quality. After any change to chunking, optional enrichment, hybrid,
 rerank, or repo map, run `pytest -m eval` against a populated
 index and confirm `recall@10` + `MRR` stay above the floors in
 `queries.json._meta`.
+
+The CI workflow always runs lint + `pytest -q`. A separate `ragas-regression`
+job runs when `DEEPINFRA_API_KEY` is configured: it starts Qdrant, ingests the
+seed Forge skills, runs `evals.run_ragas --limit 10`, gates faithfulness,
+answer relevancy, and context recall, and uploads `evals/ci_ragas.json`. The
+`evals.run_code_eval` runner is a manual golden-set check for nDCG@10,
+Recall@10, and pairwise preference accuracy; it is not wired into CI.
 
 TurboQuant is the only supported dense-vector compression mode. Eval decisions
 compare the current Qdrant stack against the floors in `queries.json._meta`.

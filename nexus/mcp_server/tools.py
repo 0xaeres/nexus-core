@@ -16,6 +16,8 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path, PurePath
 
+from pydantic import BaseModel
+
 from nexus.config import NexusConfig
 from nexus.council.queue import ProposalQueue
 from nexus.council.skill_catalog import fixed_skill_name, product_slug
@@ -24,6 +26,11 @@ from nexus.skills.models import Skill
 from nexus.skills.store import SkillStore
 
 log = logging.getLogger(__name__)
+
+
+class ToolError(BaseModel):
+    error: str
+    product_id: str | None = None
 
 
 @dataclass
@@ -202,7 +209,11 @@ async def hybrid_search_corpus(
     top_k: int = 5,
 ) -> dict:
     """Hybrid retrieval (dense + BM25 + rerank) against the indexed corpus."""
-    pid = product_id or state.product
+    if product_id is not None and product_id != state.product:
+        return ToolError(error="cross-product corpus search is not allowed").model_dump(
+            exclude_none=True
+        )
+    pid = state.product
     result = await retrieve(
         ctx=state.ctx, product_id=pid, query=query, top_k=top_k, mode="auto"
     )
@@ -239,6 +250,11 @@ async def skill_markdown(state: ToolState, *, name: str) -> str:
 
 
 async def corpus_summary(state: ToolState, *, product_id: str) -> dict:
+    if product_id != state.product:
+        return ToolError(
+            product_id=product_id,
+            error="cross-product corpus access is not allowed",
+        ).model_dump(exclude_none=True)
     indexer = state.ctx.indexer
     try:
         code_count = await indexer.count(product_id=product_id, vector_kind="code")
