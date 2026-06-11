@@ -106,6 +106,7 @@ class ChatClient:
         self.top_p = top_p
         self.trace_context = trace_context or {}
         self._http_client = httpx.AsyncClient(timeout=timeout_s)
+        # AsyncOpenAI sets Authorization from api_key for OpenAI-compatible providers.
         self._client = AsyncOpenAI(
             api_key=api_key or "unused",
             base_url=self.base_url,
