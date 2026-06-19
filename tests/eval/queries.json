@@ -66,6 +66,24 @@
       "tags": ["ingest", "chunker"]
     },
     {
+      "query": "where is MAX_CHUNK_CHARS defined",
+      "expected": [{"file": "nexus/ingest/chunker.py"}],
+      "tags": ["ingest", "chunker", "local-exact"]
+    },
+    {
+      "query": "how are oversized chunks split",
+      "expected": [{"file": "nexus/ingest/chunker.py"}],
+      "tags": ["ingest", "chunker", "local-semantic"]
+    },
+    {
+      "query": "explain our chunking strategy",
+      "expected": [
+        {"file": "ENGINEERING.md", "line_start": 214, "line_end": 230},
+        {"file": "nexus/ingest/chunker.py"}
+      ],
+      "tags": ["ingest", "chunker", "global"]
+    },
+    {
       "query": "how is the embedder client called per batch",
       "expected": [{"file": "nexus/ingest/embedder.py"}],
       "tags": ["ingest"]
@@ -79,6 +97,27 @@
       "query": "ingest pipeline orchestrates chunking enrichment embedding indexing",
       "expected": [{"file": "nexus/ingest/pipeline.py"}],
       "tags": ["ingest"]
+    },
+    {
+      "query": "how does delta sync avoid stale chunks",
+      "expected": [
+        {"file": "ENGINEERING.md", "line_start": 169, "line_end": 190},
+        {"file": "nexus/ingest/pipeline.py"}
+      ],
+      "tags": ["ingest", "pipeline"]
+    },
+    {
+      "query": "what uses graph node ids during retrieval",
+      "expected": [
+        {"file": "nexus/retrieval/pipeline.py"},
+        {"file": "nexus/ingest/indexer.py"}
+      ],
+      "tags": ["retrieval", "graph", "relational"]
+    },
+    {
+      "query": "does Nexus OCR diagrams",
+      "expected": [{"file": "ENGINEERING.md", "line_start": 285, "line_end": 288}],
+      "tags": ["negative", "visual-evidence"]
     },
     {
       "query": "prepend context summary before embedding text",

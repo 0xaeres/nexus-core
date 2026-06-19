@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
+import os
 from datetime import datetime
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, Field, field_validator
 
 from nexus.api.authz import (
-    auth_mode,
     current_user,
     product_permissions,
     public_user,
@@ -56,8 +56,6 @@ async def login(
     response: Response,
     store: AuthStore = Depends(get_auth_store),
 ) -> dict:
-    if auth_mode() == "auth0":
-        raise HTTPException(status_code=404, detail="local login disabled")
     try:
         store.check_rate_limit(
             bucket="login",
@@ -76,7 +74,7 @@ async def login(
         SESSION_COOKIE,
         result.session_token,
         httponly=True,
-        secure=True,
+        secure=_secure_cookie(request),
         samesite="lax",
         expires=expires,
         max_age=SESSION_TTL_DAYS * 24 * 60 * 60,
@@ -85,7 +83,7 @@ async def login(
         CSRF_COOKIE,
         result.csrf_token,
         httponly=False,
-        secure=True,
+        secure=_secure_cookie(request),
         samesite="lax",
         expires=expires,
         max_age=SESSION_TTL_DAYS * 24 * 60 * 60,
@@ -171,7 +169,7 @@ async def approve_access_request(
             decided_by=admin["email"],
             password=body.password,
             role=body.role,
-            require_password=auth_mode() != "auth0",
+            require_password=True,
         )
     except AuthError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
@@ -231,3 +229,12 @@ def _valid_email(value: str) -> str:
 def _client_key(request: Request, bucket: str) -> str:
     host = request.client.host if request.client else "unknown"
     return f"{bucket}:{host}"
+
+
+def _secure_cookie(request: Request) -> bool:
+    if (os.getenv("NEXUS_ENV") or "").strip().lower() == "production":
+        return True
+    forwarded_proto = request.headers.get("x-forwarded-proto", "")
+    if forwarded_proto:
+        return forwarded_proto.split(",", 1)[0].strip().lower() == "https"
+    return request.url.scheme == "https"

@@ -21,8 +21,9 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from nexus.config import NexusConfig
+from nexus.retrieval.evidence import EvidenceCandidate, retrieve_evidence
 from nexus.retrieval.hybrid import Hit
-from nexus.retrieval.pipeline import RetrievalContext, retrieve
+from nexus.retrieval.pipeline import RetrievalContext
 
 log = logging.getLogger(__name__)
 
@@ -136,10 +137,10 @@ async def run_eval(
             expected = q.get("expected") or []
             tags = q.get("tags") or []
             try:
-                rr = await retrieve(
+                rr = await retrieve_evidence(
                     ctx=ctx, product_id=product_id, query=text, top_k=top_k, mode="auto"
                 )
-                hits = rr.hits
+                hits = [_candidate_to_hit(candidate) for candidate in rr.candidates]
             except Exception as e:
                 log.warning("retrieve failed for %r: %s", text, e)
                 hits = []
@@ -159,6 +160,22 @@ async def run_eval(
         return EvalReport(results=results, top_k=top_k)
     finally:
         await ctx.aclose()
+
+
+def _candidate_to_hit(candidate: EvidenceCandidate) -> Hit:
+    return Hit(
+        id=candidate.chunk_id,
+        score=candidate.score,
+        source=candidate.channel,
+        payload={
+            "resource_uri": candidate.file,
+            "start_line": candidate.line,
+            "end_line": candidate.end_line or candidate.line,
+            "content": candidate.excerpt,
+            "context_path": candidate.context_path,
+            "graph_node_ids": candidate.graph_node_ids,
+        },
+    )
 
 
 # ---------------------------------------------------------------- CLI

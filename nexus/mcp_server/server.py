@@ -110,6 +110,68 @@ def _build_server(*, product: str, config: NexusConfig) -> Server:
                     "required": ["query"],
                 },
             ),
+            Tool(
+                name="grep_corpus",
+                description=(
+                    "Exact indexed chunk grep over the product corpus. Use for symbols, "
+                    "constants, file names, routes, and literal terms that semantic search may miss."
+                ),
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "query": {"type": "string"},
+                        "top_k": {"type": "integer", "default": 8},
+                    },
+                    "required": ["query"],
+                },
+            ),
+            Tool(
+                name="evidence_search_corpus",
+                description=(
+                    "EvidenceGraphRAG retrieval across hybrid search, exact grep, repo map, "
+                    "graph-local context, and approved skills. Prefer this for product-system "
+                    "questions that need accurate, cited context."
+                ),
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "query": {"type": "string"},
+                        "current_file": {"type": "string"},
+                        "mode": {
+                            "type": "string",
+                            "enum": ["auto", "local", "global", "drift_lite"],
+                            "default": "auto",
+                        },
+                        "top_k": {"type": "integer", "default": 10},
+                    },
+                    "required": ["query"],
+                },
+            ),
+            Tool(
+                name="ask_product_graph",
+                description=(
+                    "Generic product-system GraphRAG for arbitrary multi-hop questions. "
+                    "Resolves entities, traverses the product graph, retrieves cited corpus "
+                    "evidence, and returns an evidence-backed answer with confidence and unknowns."
+                ),
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "query": {"type": "string"},
+                        "history": {"type": "array", "default": []},
+                        "current_file": {"type": "string"},
+                        "mode": {
+                            "type": "string",
+                            "enum": ["auto", "local", "global", "drift_lite"],
+                            "default": "auto",
+                        },
+                        "max_depth": {"type": "integer", "default": 3},
+                        "top_k": {"type": "integer", "default": 8},
+                        "synthesize": {"type": "boolean", "default": True},
+                    },
+                    "required": ["query"],
+                },
+            ),
         ]
 
     @server.call_tool()
@@ -126,6 +188,12 @@ def _build_server(*, product: str, config: NexusConfig) -> Server:
                 payload = await nx_tools.query_code_context(state, **args)
             elif name == "hybrid_search_corpus":
                 payload = await nx_tools.hybrid_search_corpus(state, **args)
+            elif name == "grep_corpus":
+                payload = await nx_tools.grep_corpus(state, **args)
+            elif name == "evidence_search_corpus":
+                payload = await nx_tools.evidence_search_corpus(state, **args)
+            elif name == "ask_product_graph":
+                payload = await nx_tools.ask_product_graph(state, **args)
             else:
                 payload = {"error": f"unknown tool: {name}"}
         except Exception as e:

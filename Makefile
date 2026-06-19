@@ -6,7 +6,7 @@ help:
 	@echo "Nexus dev orchestration"
 	@echo ""
 	@echo "  make install        — uv sync (Python deps)"
-	@echo "  make services-up    — bring up Qdrant"
+	@echo "  make services-up    — bring up Qdrant + FalkorDB"
 	@echo "  make local-models-up — optional: host embedder/reranker for jina-local"
 	@echo "  make observability-up — optional: bring up Langfuse"
 	@echo "  make services-down  — stop everything"
@@ -23,7 +23,7 @@ install:
 
 # ---------------------------------------------------------------- Infra
 docker-up:
-	docker compose up -d qdrant
+	docker compose up -d qdrant falkordb
 
 docker-down:
 	docker compose down
@@ -63,6 +63,7 @@ services-up: logs docker-up
 	@echo ""
 	@echo "✓ Services up:"
 	@echo "  Qdrant   http://localhost:6333"
+	@echo "  FalkorDB localhost:6379"
 	@echo "  Models   DeepInfra by default; run make local-models-up for jina-local"
 
 services-down: docker-down

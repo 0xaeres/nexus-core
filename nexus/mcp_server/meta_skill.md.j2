@@ -21,6 +21,11 @@ find all usages of a symbol, or ground your reasoning in actual code, call
 dense + BM25 + rerank search. These query the full indexed corpus through the same
 retrieval pipeline that grounded the skills themselves.
 
+**Ask product-system questions.** For multi-hop questions about ownership, impact,
+flows, tickets, APIs, tests, runtime config, or docs, call `ask_product_graph`. It
+resolves entities, traverses the product graph, retrieves cited evidence, and returns
+confidence plus unknowns.
+
 **Report outcomes.** When a task completes (or fails), call `report_outcome` with the
 skill name and a brief note. This feeds the staleness tracking that keeps skills relevant.
 

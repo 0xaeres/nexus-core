@@ -159,6 +159,50 @@ def test_github_sync_clones_all_repos_and_aggregates_count(
     assert updated["resourceCount"] == 5
 
 
+def test_jira_sync_uses_direct_source_and_updates_count(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("NEXUS_TOKEN_KEY", TokenCipher.generate_key())
+    registry = Registry(tmp_path / "registry.db")
+    cfg = _config(tmp_path)
+    runtime = {
+        "product": "demo",
+        "name": "jira",
+        "type": "jira",
+        "status": "connected",
+        "config": {
+            "site_url": "https://example.atlassian.net",
+            "email": "me@example.com",
+            "api_token": "tok",
+            "jql": "project = AUTH",
+        },
+        "resourceCount": 0,
+    }
+    registry.upsert_source(runtime)
+    runtime = registry.get_source("demo", "jira")
+    assert runtime is not None
+
+    async def fake_ingest_jira_source(**kwargs):
+        assert kwargs["source"]["type"] == "jira"
+        return IngestStats(resources_seen=4, resources_indexed=4)
+
+    monkeypatch.setattr(sources, "_ingest_jira_source", fake_ingest_jira_source)
+
+    asyncio.run(
+        sources._sync_source_contents(
+            product_id="demo",
+            source=runtime,
+            runtime=runtime,
+            config=cfg,
+            registry=registry,
+            q=asyncio.Queue(),
+        )
+    )
+
+    updated = registry.get_source("demo", "jira")
+    assert updated is not None
+    assert updated["resourceCount"] == 4
+    assert updated["status"] == "connected"
+
+
 def test_sync_source_dedupes_in_flight_runs(tmp_path: Path, monkeypatch) -> None:
     registry = Registry(tmp_path / "registry.db")
     root = tmp_path / "repo"
@@ -199,3 +243,49 @@ def test_sync_source_dedupes_in_flight_runs(tmp_path: Path, monkeypatch) -> None
     assert first["queued"] is True
     assert second["already_running"] is True
     assert started == 1
+
+
+def test_confluence_sync_uses_direct_source_and_updates_count(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setenv("NEXUS_TOKEN_KEY", TokenCipher.generate_key())
+    registry = Registry(tmp_path / "registry.db")
+    cfg = _config(tmp_path)
+    runtime = {
+        "product": "demo",
+        "name": "confluence",
+        "type": "confluence",
+        "status": "connected",
+        "config": {
+            "site_url": "https://example.atlassian.net",
+            "email": "me@example.com",
+            "api_token": "tok",
+            "space_keys": ["DOCS"],
+        },
+        "resourceCount": 0,
+    }
+    registry.upsert_source(runtime)
+    runtime = registry.get_source("demo", "confluence")
+    assert runtime is not None
+
+    async def fake_ingest_confluence_source(**kwargs):
+        assert kwargs["source"]["type"] == "confluence"
+        return IngestStats(resources_seen=7, resources_indexed=7)
+
+    monkeypatch.setattr(sources, "_ingest_confluence_source", fake_ingest_confluence_source)
+
+    asyncio.run(
+        sources._sync_source_contents(
+            product_id="demo",
+            source=runtime,
+            runtime=runtime,
+            config=cfg,
+            registry=registry,
+            q=asyncio.Queue(),
+        )
+    )
+
+    updated = registry.get_source("demo", "confluence")
+    assert updated is not None
+    assert updated["resourceCount"] == 7
+    assert updated["status"] == "connected"

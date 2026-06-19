@@ -15,16 +15,12 @@ PRODUCT_ROLES = {"owner", "editor", "viewer"}
 WRITE_ROLES = {"owner", "editor"}
 
 
-def auth_mode() -> str:
-    return (os.getenv("NEXUS_AUTH_MODE") or "").strip().lower()
-
-
 def prod_enabled() -> bool:
     return (os.getenv("NEXUS_ENV") or "").strip().lower() == "production"
 
 
 def auth_enabled() -> bool:
-    return auth_mode() == "auth0" or bool(os.getenv("NEXUS_SECRET_KEY"))
+    return bool((os.getenv("NEXUS_SECRET_KEY") or "").strip())
 
 
 def local_fs_enabled() -> bool:
@@ -74,16 +70,16 @@ def public_user(user: dict, registry: Registry | None = None) -> dict:
 
 
 def product_permissions(user: dict, product_role: str | None = None) -> dict:
-    org_admin = user.get("role") == "admin"
-    can_write = org_admin or product_role in WRITE_ROLES
+    is_admin = user.get("role") == "admin"
+    can_write = is_admin or product_role in WRITE_ROLES
     can_read = can_write or product_role == "viewer"
     return {
         "canManageSources": can_write,
         "canRunCouncil": can_write,
         "canOnboard": user.get("status") == "approved",
         "canReadProduct": can_read,
-        "isOrgAdmin": org_admin,
-        "settingsReadOnly": not org_admin,
+        "isOrgAdmin": is_admin,
+        "settingsReadOnly": not is_admin,
     }
 
 
@@ -92,13 +88,15 @@ def assert_product_access(
 ) -> dict:
     if not auth_enabled():
         return current_user(request)
-    if not registry.get_product(product_id):
-        raise HTTPException(status_code=404, detail="product not found")
     user = require_user(request)
     if user.get("role") == "admin":
+        if not registry.get_product(product_id):
+            raise HTTPException(status_code=404, detail="product not found")
         return user
     role = registry.get_product_role(product_id, str(user["id"]))
     if action == "read" and role in PRODUCT_ROLES:
+        return user
+    if action == "delete" and role == "owner":
         return user
     if action in {"manage", "source", "council", "approve"} and role in WRITE_ROLES:
         return user

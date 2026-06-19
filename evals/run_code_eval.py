@@ -26,7 +26,8 @@ from evals.code_metrics import mean, ndcg_at_k, recall_at_k
 from evals.common import GoldenItem, load_golden
 from nexus.config import NexusConfig
 from nexus.llm.client import ChatClient
-from nexus.retrieval.pipeline import RetrievalContext, retrieve
+from nexus.retrieval.evidence import retrieve_evidence
+from nexus.retrieval.pipeline import RetrievalContext
 
 log = logging.getLogger("evals.code")
 
@@ -122,10 +123,10 @@ async def _score_one(
     judge: ChatClient,
     product_id: str,
 ) -> CodeQueryScore:
-    result = await retrieve(
+    result = await retrieve_evidence(
         ctx=ctx, product_id=product_id, query=item.query, top_k=10, mode="auto"
     )
-    retrieved_ids = [_identify(h) for h in result.hits]
+    retrieved_ids = [_identify(candidate) for candidate in result.candidates]
     relevant = {f.lower() for f in item.expected_files}
 
     # We match retrieved chunk URIs against the (substring of) expected files.
@@ -141,7 +142,7 @@ async def _score_one(
 
     pairwise: bool | None = None
     if item.anti_answer:
-        pairwise = await _pairwise(item, result.hits, judge)
+        pairwise = await _pairwise(item, result.candidates, judge)
 
     return CodeQueryScore(
         id=item.id,
@@ -153,7 +154,7 @@ async def _score_one(
 
 async def _pairwise(item: GoldenItem, hits, judge: ChatClient) -> bool | None:
     contexts = "\n---\n".join(
-        ((h.payload or {}).get("content", "") or "")[:800] for h in hits[:6]
+        (getattr(h, "excerpt", "") or "")[:800] for h in hits[:6]
     )
     # Random label assignment (A/B) — for determinism in tests we keep A=expected
     user = (
@@ -179,10 +180,9 @@ async def _pairwise(item: GoldenItem, hits, judge: ChatClient) -> bool | None:
 
 
 def _identify(hit) -> str:
-    payload = hit.payload or {}
-    uri = payload.get("resource_uri", "")
-    line = payload.get("start_line", "")
-    return f"{uri}:{line}".lower() if uri else hit.id
+    uri = getattr(hit, "file", "")
+    line = getattr(hit, "line", "")
+    return f"{uri}:{line}".lower() if uri else hit.chunk_id
 
 
 def _aggregate(results: list[CodeQueryScore]) -> dict[str, float]:

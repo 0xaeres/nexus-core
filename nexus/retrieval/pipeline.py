@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any, Literal
 
@@ -59,6 +60,7 @@ async def retrieve(
     query: str,
     top_k: int = 10,
     mode: Literal["auto", "code", "text"] = "auto",
+    graph_node_ids: Sequence[str] | None = None,
 ) -> RetrievalResult:
     """Run the pipeline. Caller is responsible for `ctx.aclose()`."""
     if mode == "code":
@@ -76,6 +78,7 @@ async def retrieve(
         query_vectors=query_vectors,
         sparse_query=query,
         vector_kinds=vector_kinds,
+        graph_node_ids=graph_node_ids,
     )
 
     if not seed_set:
@@ -122,6 +125,7 @@ async def _hybrid_search(
     query_vectors: dict[str, list[float]],
     sparse_query: str,
     vector_kinds: list[str],
+    graph_node_ids: Sequence[str] | None = None,
 ) -> list[Hit]:
     """Dense + BM25 per modality, then RRF fuse to top-20 seed set."""
     sparse_vec = None
@@ -154,10 +158,24 @@ async def _hybrid_search(
             for r in raw
         ]
 
+    async def _graph(kind: str) -> list[Hit]:
+        if not graph_node_ids or not hasattr(ctx.indexer, "search_by_graph_nodes"):
+            return []
+        raw = await ctx.indexer.search_by_graph_nodes(
+            product_id=product_id,
+            graph_node_ids=list(graph_node_ids),
+            vector_kind=kind,
+            top_k=50,
+        )
+        return [
+            Hit(id=r["id"], score=r["score"], payload=r["payload"] or {}, source="graph")
+            for r in raw
+        ]
+
     rankings: list[list[Hit]] = []
     for kind in vector_kinds:
-        d, s = await asyncio.gather(_dense(kind), _sparse(kind))
-        rankings.extend([d, s])
+        d, s, g = await asyncio.gather(_dense(kind), _sparse(kind), _graph(kind))
+        rankings.extend([d, s, g])
     return rrf_merge(rankings, top_k=20)
 
 

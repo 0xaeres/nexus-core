@@ -13,8 +13,11 @@ from nexus.mcp_server.tools import (
     ToolState,
     _matches_context,
     _matches_file_globs,
+    ask_product_graph,
     corpus_summary,
+    evidence_search_corpus,
     find_skills,
+    grep_corpus,
     hybrid_search_corpus,
     report_outcome,
 )
@@ -232,6 +235,50 @@ def test_hybrid_search_rejects_cross_product_override() -> None:
     assert result == {"error": "cross-product corpus search is not allowed"}
 
 
+def test_grep_corpus_rejects_cross_product_override() -> None:
+    state = _state_with_skills([])
+    result = asyncio.run(grep_corpus(state, query="auth", product_id="other"))
+    assert result == {"error": "cross-product corpus search is not allowed"}
+
+
+def test_evidence_search_rejects_cross_product_override() -> None:
+    state = _state_with_skills([])
+    result = asyncio.run(evidence_search_corpus(state, query="auth", product_id="other"))
+    assert result == {"error": "cross-product corpus search is not allowed"}
+
+
+def test_grep_corpus_returns_exact_hits(monkeypatch) -> None:
+    state = _state_with_skills([])
+    state._ctx = MagicMock()
+
+    async def fake_grep_indexed_chunks(**kwargs):
+        from nexus.council.state import EvidenceChunk
+
+        assert kwargs["product_id"] == "test"
+        return [
+            EvidenceChunk(
+                chunk_id="c1",
+                file="app.py",
+                line=12,
+                score=42,
+                excerpt="def auth(): pass",
+            )
+        ]
+
+    monkeypatch.setattr(
+        "nexus.mcp_server.tools.grep_indexed_chunks", fake_grep_indexed_chunks
+    )
+    result = asyncio.run(grep_corpus(state, query="auth"))
+    assert result["hits"] == [
+        {
+            "score": 42.0,
+            "anchor": "app.py:12",
+            "content": "def auth(): pass",
+            "source": "grep",
+        }
+    ]
+
+
 def test_corpus_summary_rejects_cross_product_resource() -> None:
     state = _state_with_skills([])
     result = asyncio.run(corpus_summary(state, product_id="other"))
@@ -239,3 +286,38 @@ def test_corpus_summary_rejects_cross_product_resource() -> None:
         "product_id": "other",
         "error": "cross-product corpus access is not allowed",
     }
+
+
+def test_ask_product_graph_returns_generic_graphrag_payload(monkeypatch) -> None:
+    state = _state_with_skills([])
+    state._ctx = object()  # type: ignore[assignment]
+    state._graph_store = object()
+    state._graph_store_loaded = True
+
+    async def fake_answer_graph_rag(*, ctx, graph_store, chat, product_id, request):
+        assert ctx is state._ctx
+        assert graph_store is state._graph_store
+        assert chat is None
+        assert product_id == "test"
+        assert request.query == "what owns auth?"
+        from nexus.graph.models import GraphRAGAnswer
+
+        return GraphRAGAnswer(
+            product_id=product_id,
+            query=request.query,
+            answer="Graph answer.",
+            graph_available=True,
+        )
+
+    monkeypatch.setattr("nexus.mcp_server.tools.answer_graph_rag", fake_answer_graph_rag)
+
+    result = asyncio.run(
+        ask_product_graph(
+            state,
+            query="what owns auth?",
+            synthesize=False,
+        )
+    )
+
+    assert result["answer"] == "Graph answer."
+    assert result["graph_available"] is True

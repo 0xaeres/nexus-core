@@ -100,9 +100,10 @@ async def test_product_skill_creates_one_proposal_with_fake_retrieval(tmp_path, 
             seed_count=1,
         )
 
-    monkeypatch.setattr(pack, "retrieve", fake_retrieve)
+    monkeypatch.setattr(pack, "retrieve_evidence", fake_retrieve)
     cfg = _config(tmp_path)
     chat = _Chat()
+    retrieval = object()
     state: CouncilState = initial_state(
         session_id="cs_1",
         product_id="demo",
@@ -110,8 +111,8 @@ async def test_product_skill_creates_one_proposal_with_fake_retrieval(tmp_path, 
         config_path="nexus.yaml",
     )
 
-    state.update(await pack.planner(state, config=cfg, retrieval=None, chat=chat))
-    state.update(await pack.experts(state, retrieval=None, chat=chat))
+    state.update(await pack.planner(state, config=cfg, retrieval=retrieval, chat=chat))
+    state.update(await pack.experts(state, retrieval=retrieval, chat=chat))
     state.update(await pack.synthesizer(state, config=cfg, chat=chat))
     state.update(await pack.repair_loop(state, chat=chat))
     state.update(await pack.evaluator(state, chat=chat))
@@ -155,7 +156,7 @@ async def test_single_expert_streams_json_and_reports_own_cost(tmp_path, monkeyp
             self.stream_values.append(bool(kwargs.get("stream")))
             return await super().chat_json(*_args, **kwargs)
 
-    monkeypatch.setattr(pack, "retrieve", fake_retrieve)
+    monkeypatch.setattr(pack, "retrieve_evidence", fake_retrieve)
     chat = ExpertChat()
     state: CouncilState = initial_state(
         session_id="cs_1",
@@ -167,7 +168,7 @@ async def test_single_expert_streams_json_and_reports_own_cost(tmp_path, monkeyp
     result = await pack.expert(
         state,
         name="architect",
-        retrieval=None,
+        retrieval=object(),
         chat=chat,
     )
 
@@ -257,7 +258,7 @@ async def test_fixed_pack_no_evidence_stops_before_drafting(tmp_path, monkeypatc
     async def fake_retrieve(**_kwargs):
         return RetrievalResult(hits=[], seed_count=0)
 
-    monkeypatch.setattr(pack, "retrieve", fake_retrieve)
+    monkeypatch.setattr(pack, "retrieve_evidence", fake_retrieve)
     state = initial_state(
         session_id="cs_1",
         product_id="demo",
@@ -266,7 +267,7 @@ async def test_fixed_pack_no_evidence_stops_before_drafting(tmp_path, monkeypatc
     )
 
     with pytest.raises(CouncilNoEvidence):
-        await pack.planner(state, config=_config(tmp_path), retrieval=None, chat=_Chat())
+        await pack.planner(state, config=_config(tmp_path), retrieval=object(), chat=_Chat())
 
 
 @pytest.mark.asyncio

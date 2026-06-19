@@ -3,275 +3,245 @@
 </p>
 
 <p align="center">
-  <a href="./LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-7C8CFF.svg"></a>
+  <a href="./LICENSE"><img alt="License: Apache-2.0" src="https://img.shields.io/badge/license-Apache--2.0-7C8CFF.svg"></a>
   <img alt="Python 3.13+" src="https://img.shields.io/badge/python-3.13%2B-12121A.svg">
   <img alt="FastAPI" src="https://img.shields.io/badge/FastAPI-backend-009688.svg">
   <img alt="MCP-native" src="https://img.shields.io/badge/MCP-native-7C8CFF.svg">
-  <img alt="LLM Council" src="https://img.shields.io/badge/LLM-council-12121A.svg">
   <img alt="RAG" src="https://img.shields.io/badge/RAG-dense%20%2B%20BM25%20%2B%20rerank-7C8CFF.svg">
 </p>
 
-# Nexus — Context Engine for Engineering Teams
+# Nexus
 
-Nexus is a **sovereign, MCP-native context engine** for your codebase. It
-ingests your code and docs, runs a bounded expert LLM council to draft curated
-product skill packs with human approval, and serves those skills back via MCP to any AI
-client (Claude, Cursor, Continue, etc.).
+Nexus is a sovereign, MCP-native context engine for engineering teams. It
+ingests a product's code and docs, builds a product-scoped retrieval index,
+runs a bounded expert council to draft Agent Skills, requires human approval,
+and serves approved skills plus raw corpus context over MCP to AI coding
+clients.
 
-Every AI tool your team uses gets grounded in *your* actual code and
-conventions — not hallucinated from general training data.
+Use Nexus when one org has multiple products, each with its own codebase,
+docs, source credentials, approved guidance, and tenancy boundary.
 
+## What Nexus Guarantees
+
+- **Product-scoped tenancy.** Every source, chunk, proposal, session, skill,
+  and retrieval query carries `product_id`.
+- **Human approval before publication.** Agents draft proposals; only explicit
+  approval writes `SKILL.md` files.
+- **Delta-safe sync.** Resync reads manifests, skips unchanged resources,
+  embeds changed resources before stale chunk cleanup, and deletes removed
+  resources from derived indexes.
+- **Measured retrieval.** The serving path is dense + BM25, reciprocal rank
+  fusion, then Jina reranking. More layers require eval evidence.
+- **Portable output.** Approved skills are ordinary Agent Skills directories
+  served through MCP, so Claude, Codex, Cursor, Continue, and other clients can
+  consume the same product guidance.
+
+See [AGENTS.md](./AGENTS.md) for contributor invariants and
+[ENGINEERING.md](./ENGINEERING.md) for the formal backend spec.
+
+## System Architecture
+
+```mermaid
+flowchart LR
+  subgraph Sources["Product sources"]
+    GitHub["GitHub repos"]
+    Local["Local filesystem"]
+    Docs["Markdown / text docs"]
+  end
+
+  subgraph API["Nexus backend"]
+    FastAPI["FastAPI API"]
+    Registry["SQLite registry"]
+    Ingest["Delta ingest pipeline"]
+    Retrieval["Retrieval pipeline"]
+    Council["Bounded expert council"]
+    Approval["Human approval flow"]
+    MCP["MCP server"]
+  end
+
+  subgraph Stores["Derived stores"]
+    Qdrant["Qdrant vectors + BM25 sparse"]
+    RepoMap["Repo maps"]
+    SkillsRepo["Git skills repo"]
+  end
+
+  subgraph Clients["Consumers"]
+    UI["Next.js UI"]
+    Agents["Claude / Codex / Cursor / Continue"]
+  end
+
+  GitHub --> Ingest
+  Local --> Ingest
+  Docs --> Ingest
+  UI --> FastAPI
+  FastAPI --> Registry
+  FastAPI --> Ingest
+  Ingest --> Registry
+  Ingest --> Qdrant
+  Ingest --> RepoMap
+  Retrieval --> Qdrant
+  Retrieval --> RepoMap
+  FastAPI --> Council
+  Council --> Retrieval
+  Council --> Registry
+  FastAPI --> Approval
+  Approval --> SkillsRepo
+  Approval --> Qdrant
+  MCP --> SkillsRepo
+  MCP --> Retrieval
+  Agents --> MCP
 ```
-Your codebase + docs
-        │
-        ▼
-  Nexus ingests (GitHub or local filesystem)
-        │
-        ▼
-  Hybrid retrieval (dense + BM25 + rerank)
-        │
-        ▼
-  Expert council drafts a product skill pack
-        │  ← seeded by an aider-style repo map + retrieved chunks
-        ▼
-  Human reviews + approves proposals in the UI
-        │
-        ▼
-  Skills served via MCP to Claude / Cursor / Continue / any agent
+
+Nexus separates source-of-truth state from derived serving state:
+
+| Layer | Component | Responsibility |
+|---|---|---|
+| API | `nexus/api/` | Product, source, council, proposal, skill, setup, auth, and dashboard routes. |
+| Registry | SQLite via `nexus/registry.py` | Products, runtime sources, sync manifests, sync runs, proposal/session metadata. |
+| Ingest | `nexus/ingest/` | Source diff, chunking, optional enrichment, embeddings, sparse vectors, Qdrant writes, stale cleanup. |
+| Retrieval | `nexus/retrieval/` | Dense + BM25 search, RRF merge, Jina rerank, repo map context. |
+| Council | `nexus/council/` | Planner, expert fanout, synthesizer, repair, eval, finalizer, SSE progress. |
+| Skills | `nexus/skills/` | Agent Skills parsing, storage, provenance, approval write path, Git commit/push. |
+| MCP | `nexus/mcp_server/` | `find_skills`, `get_skill`, `query_code_context`, `hybrid_search_corpus`. |
+| UI | `../nexus-ui/` | Product onboarding, sync logs, council sessions, review/approval UX. |
+
+For a code-level module map and end-to-end traces, use
+[CONTRIBUTING.md](./CONTRIBUTING.md). For API contracts and data models, use
+[ENGINEERING.md](./ENGINEERING.md).
+
+## Runtime Flow
+
+```mermaid
+sequenceDiagram
+  autonumber
+  actor User
+  participant UI as Nexus UI
+  participant API as FastAPI
+  participant Registry as SQLite registry
+  participant Ingest as Ingest pipeline
+  participant Qdrant
+  participant Council as Expert council
+  participant Skills as Skills repo
+  participant MCP as MCP clients
+
+  User->>UI: Create product + add source
+  UI->>API: POST /products/{id}/sources
+  API->>Registry: Store encrypted source credentials
+  User->>UI: Sync source
+  UI->>API: POST /sources/{id}/sync
+  API->>Ingest: Start background sync
+  Ingest->>Registry: Load manifest + compute diff
+  Ingest->>Qdrant: Upsert changed chunks
+  Ingest->>Qdrant: Delete stale/removed chunks
+  Ingest->>Registry: Persist successful manifest
+  User->>UI: Run council
+  UI->>API: POST /council/sessions
+  API->>Council: Start bounded LangGraph workflow
+  Council->>Qdrant: Retrieve evidence
+  Council->>Registry: Queue skill proposals
+  User->>UI: Review + approve
+  UI->>API: POST /proposals/{id}/approve
+  API->>Skills: Commit approved SKILL.md
+  API->>Qdrant: Index approved skill body
+  MCP->>Skills: Serve approved skills
+  MCP->>Qdrant: Serve product-scoped context
 ```
 
----
+## Skill Pack Lifecycle
 
-## What is a skill file?
-
-A skill is an Agent Skills directory with a `SKILL.md` file that tells an agent
-*how to work in your codebase*: patterns to follow, pitfalls to avoid,
-architectural context, domain vocabulary, and when to use the skill. One
-product gets a fixed three-skill pack: context, architecture, and engineering.
-Factual product claims cite file:line evidence; procedural playbook guidance
-stays concise and uncited unless it names a concrete product fact.
-
-```yaml
----
-name: auth-token-rotation
-description: Use for auth token rotation, refresh flows, session validation, and security review.
-compatibility:
-  agents: ["codex", "claude", "cursor", "continue"]
-  format: agent-skills
-metadata:
-  nexus_product: my-api
-  nexus_tier: interface
-  nexus_confidence: 0.84
-  nexus_provenance:
-    council_session: cs_20260524_142117_a3f2c1
-    validated_by: alice@example.com
-    validated_at: 2026-05-24T14:25:00Z
-    evidence_chunks: [c1, c2, c5]
-    revision_count: 0
----
-
-# auth-token-rotation
-
-We rotate JWT tokens on every refresh; the prior token is short-lived (15m)
-and the refresh token is rotated atomically with the access token.
-
-## Rules
-1. Always call `rotate_token()` — never mint a fresh token directly
-   [file: src/auth/tokens.py:42].
-2. Refresh and access tokens MUST rotate as a pair [file: src/auth/refresh.py:18].
-3. Reject any token older than 15 minutes [file: src/auth/middleware.py:27].
-
-## Anti-patterns
-- Never store the refresh token in localStorage [file: src/auth/store.py:9].
-- Don't share tokens across tenants — they're scoped per workspace.
+```mermaid
+flowchart TD
+  Topic["Council topic"] --> Planner["Planner"]
+  Planner --> Experts["Expert reports: architect, domain, quality"]
+  Experts --> Synth["Synthesizer writes Markdown skill"]
+  Synth --> Parse["Parse citations + validate 13-section structure"]
+  Parse --> Complete{"Complete + faithful?"}
+  Complete -- "no" --> Repair["Targeted repair, max 3 attempts"]
+  Repair --> Parse
+  Complete -- "yes" --> Eval["Deterministic eval checks"]
+  Eval --> Queue["Queue proposal"]
+  Queue --> Review["Human review"]
+  Review -->|approve| Publish["Commit SKILL.md + index skill"]
+  Review -->|edit| Publish
+  Review -->|reject| Stop["No skill written"]
 ```
 
----
+The council emits Markdown skills, not JSON. Incomplete drafts never enter the
+review queue. See [ENGINEERING.md](./ENGINEERING.md) for the full council
+contract.
 
-## Local setup (Apple Silicon dev)
+## Quick Start
 
-### Prerequisites
+Prereqs:
+
+- Python 3.13+
+- `uv`
+- Docker or a reachable Qdrant
+- DeepInfra API key for default cloud embeddings/reranking and council LLMs
+- Sibling UI repo at `../nexus-ui/`
+
+Install backend deps:
 
 ```bash
-uv sync                               # installs everything from uv.lock
-
-# One-time: local model servers
-brew install llama.cpp
-mkdir -p models
-./scripts/download-models.sh          # Jina embedding v4 + reranker v3
+uv sync
 ```
 
-### Configure
+Create local config:
 
 ```bash
 cp nexus.yaml.example nexus.yaml
 cp .env.example .env
 ```
 
-Edit `nexus.yaml`:
-- `skills_repo` — the org's Git repo (optional; the first-run UI wizard at
-  `/setup` can create one for you)
-- `connectors` — optional static sources; most products are onboarded through
-  the UI with a GitHub service-account token and one or more repo URLs
-
-Edit `.env`:
-- `DEEPINFRA_API_KEY` — council LLMs (and optional enrichment, if enabled)
-- `GITHUB_TOKEN` — for the GitHub connector
-- `NEXUS_TOKEN_KEY` — Fernet key for encrypting connector tokens at rest
-
-### Start dev stack
+Required `.env` values for normal development:
 
 ```bash
-make dev                              # Qdrant + API; DeepInfra does embeddings/rerank by default
+DEEPINFRA_API_KEY=...
+NEXUS_TOKEN_KEY=...
+NEXUS_SKILLS_REPO_TOKEN=...
 ```
 
-If you use the optional local Jina profile, run `make local-models-up` to start
-local llama.cpp embedder/reranker. `make dev` stays on Qdrant; dense vector
-compression uses Qdrant's native TurboQuant by default.
-
-```yaml
-vector_store:
-  quantization:
-    enabled: true
-    type: turboquant
-    bits: bits4            # best recall; lower bits compress more
-    always_ram: true
-```
-
-Model swaps need matching config. If you move from local Jina to a cloud
-embedding/reranker, set the embedding dimension, instruction profile, and keep
-`quality_gate_threshold: 0.0` until eval calibrates the new reranker scores.
-Changing embedding provider/model/dimension/profile requires product resync.
-
-Nexus does not currently understand visual Confluence architecture diagrams or
-image attachments. It can index surrounding page text, but it does not extract
-diagram boxes/arrows/labels, create visual embeddings, or cite image regions.
-
-The local llama.cpp scripts auto-detect acceleration:
-
-- Apple Silicon → Metal (`--n-gpu-layers 999`)
-- Nvidia host → GPU
-- otherwise → CPU
-
-Local model defaults are conservative for a MacBook Air M2 with 8GB RAM. The
-default DeepInfra ingest path uses larger client batches
-(`embed_batch_size=32`, `file_batch_size=50`, `read_concurrency=10`,
-`batch_concurrency=2`) because LLM chunk enrichment is off.
+Generate `NEXUS_TOKEN_KEY`:
 
 ```bash
-EMBEDDER_DEVICE=cpu RERANKER_DEVICE=cpu make services-up   # force CPU
-EMBEDDER_UBATCH=2048 RERANKER_UBATCH=2048 make services-up # larger RAM
+uv run python -c "from nexus.auth.token_cipher import TokenCipher; print(TokenCipher.generate_key())"
 ```
 
-### Run the API
+Start the backend stack:
 
 ```bash
+make dev
 uv run uvicorn nexus.api.app:app --port 8000 --reload
-# → http://localhost:8000/health  {"status":"ok"}
 ```
 
-### Run the UI
+Start the UI:
 
 ```bash
 cd ../nexus-ui
 npm install
 npm run dev
-# → http://localhost:3000
 ```
 
-On first boot there's no skills repository and no products. The app routes
-you to `/setup` — a one-time wizard that either creates a new GitHub repo or
-attaches to one you already own. The repo is initialised empty; skill files
-land as the council approves them.
+Open `http://localhost:3000/setup` and connect or create the org skills repo.
+Then create a product, add a GitHub source with a product service-account PAT,
+sync it, run council, and review proposals.
 
-### Deploy: Oracle VM + Vercel
+## Configuration Notes
 
-Full runbook: [`docs/DEPLOYMENT.md`](./docs/DEPLOYMENT.md).
+- `nexus.yaml` controls source defaults, retrieval backends, model endpoints,
+  Qdrant settings, skills repo paths, and local model profiles.
+- Product GitHub PATs are entered during onboarding and stored encrypted per
+  product source. They are not global credentials.
+- `NEXUS_SKILLS_REPO_TOKEN` is only for creating/cloning/pushing the org skills
+  repository.
+- Qdrant is derived state. SQLite manifests decide what has been successfully
+  indexed.
+- Optional chunk enrichment exists for code HQE and doc contextual retrieval,
+  but default ingest uses fast raw dense + BM25 indexing.
 
-Backend production shape is one Oracle VM running Docker Compose:
+## MCP Usage
 
-```bash
-cp nexus.prod.yaml.example nexus.yaml
-cp .env.example .env
-# fill DEEPINFRA_API_KEY, NEXUS_TOKEN_KEY, NEXUS_SECRET_KEY,
-# NEXUS_ADMIN_API_KEY, NEXUS_BOOTSTRAP_ADMIN_EMAIL/PASSWORD,
-# NEXUS_ALLOWED_ORIGINS=https://<your-vercel-app>, and NEXUS_API_DOMAIN
-docker compose -f docker-compose.prod.yml up -d --build
-```
-
-Only Caddy exposes `80/443`; Qdrant stays on the private Compose network. The
-API is protected when `NEXUS_SECRET_KEY` is set. Browser sessions use secure
-HttpOnly cookies plus CSRF headers, and the bootstrap admin is created from
-env on first boot. Vercel needs:
-
-```bash
-NEXT_PUBLIC_NEXUS_API=https://<NEXUS_API_DOMAIN>
-```
-
-Langfuse tracing is enabled when `LANGFUSE_PUBLIC_KEY` and
-`LANGFUSE_SECRET_KEY` are set. Prompt/response capture is off by default via
-`NEXUS_TRACE_CONTENT=false`.
-
----
-
-## End-to-end flow
-
-### 1. First-run setup (one-time, org-wide)
-
-Visit `http://localhost:3000/setup`:
-- **Create new repo** — Nexus uses `GITHUB_TOKEN` to mint a fresh repo.
-- **Use existing repo** — paste a clone URL; Nexus verifies it can clone.
-
-### 2. Onboard a product via the UI
-
-- Create the product (`/new`)
-- Provide the product service-account GitHub PAT and one or more GitHub repo
-  URLs; Nexus creates the product-scoped GitHub source and starts ingest
-- Trigger ingestion; watch the live SSE sync log. Resync is delta-safe:
-  unchanged files are skipped, changed files are embedded before stale vectors
-  are deleted, and removed files are cleaned from the configured retrieval
-  index after successful delete-by-ID. Default ingest is fast raw
-  dense+BM25 indexing; LLM chunk enrichment is disabled by default and can be
-  re-enabled per config later.
-- Start a council session; watch the live deliberation
-- Approve / edit / reject the proposal at `/p/<id>/review`
-
-### 3. CLI alternative
-
-```bash
-uv run nexus council draft \
-  --product <your-product-id> \
-  --topic "authentication middleware"
-
-open http://localhost:3000/p/<your-product-id>/review
-```
-
-### 4. Delete a product completely
-
-Use the guarded CLI cleanup when a test product needs to be removed from local
-state and the derived retrieval index.
-
-```bash
-# Dry-run first. Shows every product-scoped thing that would be removed.
-uv run nexus delete-product --product <your-product-id>
-
-# Actually delete.
-uv run nexus delete-product --product <your-product-id> --yes
-```
-
-This removes the product row, sources, source manifests, sync runs, proposals,
-council sessions, approved `SKILL.md` files, retrieval index entries, the
-persisted repo map, and LangGraph checkpoints for that product's sessions.
-
-If the retrieval backend is offline and you only want local SQLite/filesystem cleanup:
-
-```bash
-uv run nexus delete-product --product <your-product-id> --yes --skip-qdrant
-```
-
-### 5. Use Nexus from Claude Desktop
-
-Add to `~/Library/Application Support/Claude/claude_desktop_config.json`:
+Claude Desktop example:
 
 ```json
 {
@@ -279,9 +249,12 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json`:
     "nexus": {
       "command": "uv",
       "args": [
-        "--directory", "/absolute/path/to/nexus",
-        "run", "nexus-mcp-server",
-        "--product", "<your-product-id>"
+        "--directory",
+        "/absolute/path/to/nexus",
+        "run",
+        "nexus-mcp-server",
+        "--product",
+        "<your-product-id>"
       ],
       "env": {
         "NEXUS_CONFIG": "/absolute/path/to/nexus/nexus.yaml"
@@ -291,81 +264,62 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json`:
 }
 ```
 
-The MCP server exposes:
-- `find_skills(query, context?, current_file?, top_k?)`
-- `get_skill(name)`
-- `report_outcome(skill_name, succeeded, notes?)`
-- `query_code_context(symbol, file_glob?)`
-- `hybrid_search_corpus(query, product_id?, top_k?)`
+Exposed MCP tools:
 
----
+| Tool | Purpose |
+|---|---|
+| `find_skills` | Find approved product skills for a task/context. |
+| `get_skill` | Return one approved skill body. |
+| `query_code_context` | Retrieve product-scoped source context for a symbol or question. |
+| `hybrid_search_corpus` | Run direct dense + BM25 + rerank corpus search. |
+| `report_outcome` | Record whether a skill helped. |
 
-## Project layout
+## Production Deployment
 
-```
-nexus/
-├── nexus/
-│   ├── api/           FastAPI routes (/products, /sources, /council, /skills, /setup)
-│   ├── ingest/        Delta-safe manifest sync, chunker (tree-sitter),
-│   │                  optional background enricher, embedder,
-│   │                  Qdrant indexer (dense + BM25 + TurboQuant)
-│   ├── retrieval/     Hybrid pipeline (dense + BM25 → RRF → reranker),
-│   │                  repomap (aider-style symbol outline)
-│   ├── council/       LangGraph skill-pack council: planner, experts, synthesizer
-│   │                  Plus runner (SSE), queue (SQLite), skill_parser
-│   ├── skills/        Skill model, Agent Skills store, approval flow
-│   ├── connectors/    local_fs + MCP client
-│   ├── mcp_server/    MCP stdio server — what Claude Desktop connects to
-│   ├── llm/           OpenAI-compatible chat client (continuation-aware)
-│   ├── daemon.py      Continuous index daemon
-│   └── config.py      nexus.yaml loader
-├── tests/             unit + integration tests
-├── tests/eval/        41-query retrieval benchmark (recall@10 + MRR)
-└── docker-compose.yml
-```
+Production target:
 
----
+- Backend: Oracle VM, Docker Compose, Caddy TLS, FastAPI, private Qdrant.
+- Frontend: Vercel running `../nexus-ui/`.
+- Auth: Auth0 Universal Login with backend RS256/JWKS validation.
+- Observability: Langfuse when configured.
 
-## Quality gates
+Use [docs/DEPLOYMENT.md](./docs/DEPLOYMENT.md) for the full runbook,
+environment variables, smoke tests, backup targets, and upgrade steps.
+
+## Development
+
+Common checks:
 
 ```bash
 uv run ruff check nexus tests
-uv run pytest -q                       # unit + integration tests
-uv run pytest -m eval                  # opt-in retrieval benchmark
-uv run python -m evals.run_ragas       # RAGAS-style golden eval
-uv run python -m evals.run_code_eval   # manual code retrieval eval
-make test-live-e2e                     # live Qdrant E2E
+uv run pytest -q
 ```
 
-The eval set under `tests/eval/queries.json` is the authoritative measure of
-retrieval quality. After any change to chunking, optional enrichment, hybrid,
-rerank, or repo map, run `pytest -m eval` against a populated
-index and confirm `recall@10` + `MRR` stay above the floors in
-`queries.json._meta`.
+Retrieval/eval checks are opt-in:
 
-The CI workflow always runs lint + `pytest -q`. A separate `ragas-regression`
-job runs when `DEEPINFRA_API_KEY` is configured: it starts Qdrant, ingests the
-seed Forge skills, runs `evals.run_ragas --limit 10`, gates faithfulness,
-answer relevancy, and context recall, and uploads `evals/ci_ragas.json`. The
-`evals.run_code_eval` runner is a manual golden-set check for nDCG@10,
-Recall@10, and pairwise preference accuracy; it is not wired into CI.
+```bash
+uv run nexus eval run --suite retrieval
+uv run pytest -m eval
+uv run python -m evals.run_ragas
+uv run python -m evals.run_code_eval
+make test-live-e2e
+```
 
-TurboQuant is the only supported dense-vector compression mode. Eval decisions
-compare the current Qdrant stack against the floors in `queries.json._meta`.
+Run retrieval evals after changes to chunking, embedding, optional enrichment,
+hybrid search, reranking, or repo map generation. See
+[evals/README.md](./evals/README.md) for eval harness details and
+[CONTRIBUTING.md](./CONTRIBUTING.md) for contributor workflow.
 
----
+## Documentation Map
 
-## Documentation
-
-| File | What it covers |
+| File | Use it for |
 |---|---|
-| [`AGENTS.md`](./AGENTS.md) | Quick orientation — invariants, conventions, commit checks. |
-| [`CONTRIBUTING.md`](./CONTRIBUTING.md) | New-contributor guide — code map, end-to-end traces, dev workflow. |
-| [`ENGINEERING.md`](./ENGINEERING.md) | Full architecture spec + data model. |
-| [`../nexus-ui/DESIGN.md`](../nexus-ui/DESIGN.md) | UI design system rules. |
-
----
+| [AGENTS.md](./AGENTS.md) | Non-negotiable invariants, conventions, commit checks. |
+| [CONTRIBUTING.md](./CONTRIBUTING.md) | Contributor onboarding, code map, end-to-end traces, recipes. |
+| [ENGINEERING.md](./ENGINEERING.md) | Formal architecture, data model, API and pipeline contracts. |
+| [docs/DEPLOYMENT.md](./docs/DEPLOYMENT.md) | Production deployment and operations. |
+| [../nexus-ui/DESIGN.md](../nexus-ui/DESIGN.md) | Frontend design system and IA rules. |
 
 ## License
 
-MIT — see [LICENSE](./LICENSE).
+Apache License 2.0. See [LICENSE](./LICENSE).

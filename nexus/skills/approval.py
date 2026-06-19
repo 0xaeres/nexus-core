@@ -7,12 +7,16 @@ proposal is a no-op).
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import os
 import re
 import textwrap
 from contextlib import suppress
 from datetime import UTC, datetime
 from pathlib import Path
+
+from git.exc import GitError
 
 from nexus.config import NexusConfig
 from nexus.council.queue import ProposalQueue
@@ -20,7 +24,8 @@ from nexus.ingest.embedder import EmbedderClient
 from nexus.ingest.indexer import Indexer
 from nexus.ingest.models import Chunk, ChunkKind, EmbeddedChunk, ResourceRef
 from nexus.retrieval.sparse import aencode_passages
-from nexus.skills.git import commit_and_push
+from nexus.setup import SetupKV
+from nexus.skills.git import commit_and_push, ensure_checkout
 from nexus.skills.models import AppliesTo, Citation, Provenance, Skill, SkillCoverage
 from nexus.skills.store import SkillStore
 
@@ -54,7 +59,21 @@ async def approve_proposal(
         }
 
     skill = _row_to_skill(row, actor=actor)
-    store = SkillStore(_resolve_root(config.hierarchy_root))
+    root = _resolve_root(config.hierarchy_root)
+    try:
+        await asyncio.to_thread(
+            ensure_checkout,
+            root,
+            _resolve_skills_repo_url(config),
+            token=_skills_repo_token(),
+        )
+    except GitError as e:
+        raise ApprovalPublishError(
+            "skill file was not written because skills repo checkout is unavailable; "
+            f"proposal remains pending: {e}"
+        ) from e
+
+    store = SkillStore(root)
     rel = SkillStore.relative_path_for(skill)
     target = store.root / rel
     previous = target.read_text(encoding="utf-8") if target.exists() else None
@@ -155,6 +174,15 @@ def _row_to_skill(row: dict, *, actor: str) -> Skill:
         ),
         body=_wrap_markdown_body(row["body"]),
     )
+
+
+def _resolve_skills_repo_url(config: NexusConfig) -> str:
+    kv = SetupKV(config.storage.proposal_queue.parent / "registry.db")
+    return kv.get("skills_repo") or config.skills_repo or ""
+
+
+def _skills_repo_token() -> str | None:
+    return os.environ.get("NEXUS_SKILLS_REPO_TOKEN") or os.environ.get("GITHUB_TOKEN") or None
 
 
 def _wrap_markdown_body(body: str, *, width: int = DOC_LINE_WIDTH) -> str:

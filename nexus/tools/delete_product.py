@@ -8,6 +8,7 @@ from pathlib import Path
 
 from nexus.config import NexusConfig
 from nexus.council.queue import ProposalQueue
+from nexus.graph.store import create_graph_store
 from nexus.ingest.indexer_factory import create_indexer
 from nexus.registry import Registry
 from nexus.retrieval.repomap import repomap_path_for
@@ -21,6 +22,7 @@ class DeleteProductReport:
     queue: dict[str, int | list[str]] = field(default_factory=dict)
     skills: int = 0
     index: dict[str, int] = field(default_factory=dict)
+    graph_deleted: bool = False
     repomap_deleted: bool = False
     checkpoints: int = 0
 
@@ -60,6 +62,13 @@ async def delete_product(
 
     if dry_run:
         return report
+
+    graph_store = create_graph_store(config)
+    try:
+        await graph_store.delete_product(product_id=product_id)
+        report.graph_deleted = True
+    finally:
+        await graph_store.aclose()
 
     registry.delete_product(product_id)
     queue.delete_product(product_id)

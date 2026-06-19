@@ -27,6 +27,7 @@ from nexus.config import NexusConfig
 from nexus.council.agents import pack
 from nexus.council.errors import CouncilAgentError
 from nexus.council.state import CouncilState
+from nexus.graph.store import create_graph_store
 from nexus.llm.client import ChatClient
 from nexus.retrieval.pipeline import RetrievalContext
 
@@ -37,21 +38,35 @@ TokenSink = Callable[[dict[str, str]], Awaitable[None]]
 @dataclass
 class CouncilHandles:
     retrieval: RetrievalContext
+    graph_store: object
     chat_drafter: ChatClient
     chat_critic: ChatClient
     chat_reviser: ChatClient
     chat_architect: ChatClient
     chat_domain_expert: ChatClient
     chat_quality_expert: ChatClient
+    chat_synthesizer: ChatClient
 
     async def aclose(self) -> None:
-        await self.retrieval.aclose()
-        await self.chat_drafter.aclose()
-        await self.chat_critic.aclose()
-        await self.chat_reviser.aclose()
-        await self.chat_architect.aclose()
-        await self.chat_domain_expert.aclose()
-        await self.chat_quality_expert.aclose()
+        closers = [self.retrieval.aclose]
+        if hasattr(self.graph_store, "aclose"):
+            closers.append(self.graph_store.aclose)
+        closers.extend(
+            [
+                self.chat_drafter.aclose,
+                self.chat_critic.aclose,
+                self.chat_reviser.aclose,
+                self.chat_architect.aclose,
+                self.chat_domain_expert.aclose,
+                self.chat_quality_expert.aclose,
+                self.chat_synthesizer.aclose,
+            ]
+        )
+        for close in closers:
+            try:
+                await close()
+            except Exception:
+                log.exception("council handle close failed")
 
 
 @asynccontextmanager
@@ -64,17 +79,21 @@ async def council_handles(
     drafter_cfg = config.models.drafter or config.models.council
     critic_cfg = config.models.critic or config.models.council
     reviser_cfg = config.models.reviser or config.models.council
+    synthesizer_cfg = config.models.synthesizer or drafter_cfg
     log.info(
-        "council models: drafter=%s/%s critic=%s/%s reviser=%s/%s",
+        "council models: drafter=%s/%s critic=%s/%s reviser=%s/%s synthesizer=%s/%s",
         drafter_cfg.provider,
         drafter_cfg.model,
         critic_cfg.provider,
         critic_cfg.model,
         reviser_cfg.provider,
         reviser_cfg.model,
+        synthesizer_cfg.provider,
+        synthesizer_cfg.model,
     )
     handles = CouncilHandles(
         retrieval=RetrievalContext.from_config(config),
+        graph_store=create_graph_store(config),
         chat_drafter=_chat_from_cfg(
             drafter_cfg, role="drafter", token_sink=token_sink, trace_context=trace_context
         ),
@@ -99,8 +118,16 @@ async def council_handles(
             token_sink=token_sink,
             trace_context=trace_context,
         ),
+        chat_synthesizer=_chat_from_cfg(
+            synthesizer_cfg,
+            role="synthesizer",
+            token_sink=token_sink,
+            trace_context=trace_context,
+        ),
     )
     try:
+        if hasattr(handles.graph_store, "ensure_schema"):
+            await handles.graph_store.ensure_schema()
         yield handles
     finally:
         await handles.aclose()
@@ -127,7 +154,11 @@ def build_graph(config: NexusConfig, handles: CouncilHandles):
     async def planner_node(state: CouncilState) -> dict:
         try:
             return await pack.planner(
-                state, config=config, retrieval=handles.retrieval, chat=handles.chat_drafter
+                state,
+                config=config,
+                retrieval=handles.retrieval,
+                graph_store=handles.graph_store,
+                chat=handles.chat_drafter,
             )
         except Exception as e:
             raise CouncilAgentError("planner", e) from e
@@ -135,7 +166,12 @@ def build_graph(config: NexusConfig, handles: CouncilHandles):
     async def architect_node(state: CouncilState) -> dict:
         try:
             return await pack.expert(
-                state, name="architect", retrieval=handles.retrieval, chat=handles.chat_architect
+                state,
+                name="architect",
+                config=config,
+                retrieval=handles.retrieval,
+                graph_store=handles.graph_store,
+                chat=handles.chat_architect,
             )
         except Exception as e:
             raise CouncilAgentError("architect", e) from e
@@ -143,7 +179,12 @@ def build_graph(config: NexusConfig, handles: CouncilHandles):
     async def domain_expert_node(state: CouncilState) -> dict:
         try:
             return await pack.expert(
-                state, name="domain_expert", retrieval=handles.retrieval, chat=handles.chat_domain_expert
+                state,
+                name="domain_expert",
+                config=config,
+                retrieval=handles.retrieval,
+                graph_store=handles.graph_store,
+                chat=handles.chat_domain_expert,
             )
         except Exception as e:
             raise CouncilAgentError("domain_expert", e) from e
@@ -151,7 +192,12 @@ def build_graph(config: NexusConfig, handles: CouncilHandles):
     async def quality_expert_node(state: CouncilState) -> dict:
         try:
             return await pack.expert(
-                state, name="quality_expert", retrieval=handles.retrieval, chat=handles.chat_quality_expert
+                state,
+                name="quality_expert",
+                config=config,
+                retrieval=handles.retrieval,
+                graph_store=handles.graph_store,
+                chat=handles.chat_quality_expert,
             )
         except Exception as e:
             raise CouncilAgentError("quality_expert", e) from e
@@ -159,7 +205,7 @@ def build_graph(config: NexusConfig, handles: CouncilHandles):
     async def synthesizer_node(state: CouncilState) -> dict:
         try:
             return await pack.synthesizer(
-                state, config=config, chat=handles.chat_drafter
+                state, config=config, chat=handles.chat_synthesizer
             )
         except Exception as e:
             raise CouncilAgentError("synthesizer", e) from e

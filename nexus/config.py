@@ -64,6 +64,19 @@ class VectorStoreCfg(BaseModel):
     quantization: VectorQuantizationCfg = Field(default_factory=VectorQuantizationCfg)
 
 
+class GraphStoreCfg(BaseModel):
+    """Required derived product-system graph store."""
+
+    host: str = Field("localhost", min_length=1)
+    port: int = Field(6379, gt=0, le=65535)
+    username: str | None = None
+    password: str | None = None
+    ssl: bool = False
+    graph_prefix: str = Field("nexus", min_length=1)
+    max_connections: int = Field(16, gt=0)
+    timeout_ms: int = Field(5_000, gt=0)
+
+
 class ModelCfg(BaseModel):
     """Single LLM role config. Provider-specific extras allowed."""
 
@@ -84,6 +97,8 @@ class ModelsCfg(BaseModel):
     drafter: ModelCfg | None = None
     critic: ModelCfg | None = None
     reviser: ModelCfg | None = None
+    synthesizer: ModelCfg | None = None
+    chat_agent: ModelCfg | None = None
     light: ModelCfg            # enricher (HQE + doc context)
     embedding: ModelCfg
     reranker: ModelCfg
@@ -136,6 +151,7 @@ class NexusConfig(BaseSettings):
 
     connectors: list[ConnectorCfg] = Field(default_factory=list)
     vector_store: VectorStoreCfg = Field(default_factory=VectorStoreCfg)
+    graph_store: GraphStoreCfg = Field(default_factory=GraphStoreCfg)
     models: ModelsCfg
     ingestion: IngestionCfg = Field(default_factory=IngestionCfg)
     server: ServerCfg = Field(default_factory=ServerCfg)

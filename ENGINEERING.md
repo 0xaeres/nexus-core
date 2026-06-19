@@ -340,6 +340,16 @@ with enriched vectors after the raw index exists. The indexer can delete by
 `resource_uri` for repair paths or by explicit chunk IDs for delta-safe stale
 cleanup.
 
+### Structural Summary Chunks (`nexus/ingest/summaries.py`)
+
+After deterministic graph extraction, ingest writes one source-backed structural
+summary chunk per resource when graph facts exist. Summary chunks use the
+original `resource_uri`, line `0`, `context_path="Graph summary"`, and
+`artifact_type="summary"`. They are embedded as text and carry the same
+product/source/graph metadata as normal chunks, so broad architecture queries
+can retrieve graph-aware overview evidence before drilling into concrete source
+chunks. These summaries are deterministic and do not bypass source citations.
+
 ### Repo Map (`nexus/retrieval/repomap.py`)
 
 Built once at sync time (while the local clone still exists), persisted to
@@ -372,8 +382,10 @@ blind full-source upserts.
 
 ## 4. Retrieval Pipeline
 
-`nexus/retrieval/pipeline.py::retrieve()`. Three stages, no fallbacks beyond
-rerank-soft-fail:
+Nexus has two retrieval layers.
+
+`nexus/retrieval/pipeline.py::retrieve()` remains the low-level hybrid
+primitive:
 
 ```
 embed(query) ──► dense top-50 ┐
@@ -390,10 +402,34 @@ Keep provider defaults at `0.0` until an eval set calibrates that reranker's
 score scale and proves a higher cutoff improves precision without losing
 needed evidence.
 
-Nothing else. **No** classifier, **no** HyDE, **no** semantic cache, **no**
-circuit breakers, **no** graph expansion, **no** prompt-injection guard. The
-retrieval eval set (§10) is the floor; only add layers if it moves the
-number.
+`nexus/retrieval/evidence.py::retrieve_evidence()` is the core product context
+engine used by council, MCP evidence search, and product chat. It runs
+complementary candidate channels, then assembles a coverage-aware evidence set:
+
+```text
+query understanding
+  ├─ hybrid dense+BM25+rerank
+  ├─ exact indexed grep
+  ├─ repo-map symbol search
+  ├─ graph-local traversal -> attached chunks
+  ├─ structural summary chunks
+  └─ approved skill memory
+      ↓
+mixed rerank + dedupe + channel quotas + file diversity + coverage gate
+```
+
+Graph is a navigation layer, not an answer source by itself. Graph traversal
+resolves files/symbols/routes/config keys to source-backed chunks and explains
+why adjacent evidence is related. Do not pollute semantic queries by appending
+all graph neighbor names. Broad product questions should retain documentation
+structural summaries, and implementation evidence; exact/path/symbol matches
+should not be crowded out by semantically similar but incomplete chunks. When a
+reranker is configured, the evidence engine reranks the mixed candidate pool
+across all channels before applying quotas.
+
+Still out of scope without an eval-set win: HyDE, semantic cache, classifier
+fallbacks, free-form code graph extraction, and circuit breakers. The retrieval
+eval set (§10) is the floor; new layers must improve it.
 
 ## 5. Council — Expert Skill Pack
 
@@ -735,19 +771,32 @@ background enrichment when enabled.
 
 ## 10. Eval Strategy
 
-Nexus has three eval surfaces:
+Nexus has four eval surfaces:
 
 | Surface | Runner | Scope | CI status |
 |---|---|---|---|
-| Retrieval quality | `pytest -m eval` / `python -m tests.eval.harness` | Production dense + BM25 → RRF → rerank over `tests/eval/queries.json` | Opt-in; skips when Qdrant/embedder/reranker are absent |
-| RAGAS-style golden eval | `python -m evals.run_ragas` | Golden skill queries over `evals/golden.jsonl`; LLM-judged faithfulness and answer quality | CI `ragas-regression` job when `DEEPINFRA_API_KEY` is configured |
-| Code retrieval eval | `python -m evals.run_code_eval` | Golden-set nDCG/recall and pairwise answer preference | Manual, not wired into CI |
+| Unified eval harness | `nexus eval run --suite all` / `python -m evals.harness` | Runs suite defaults, optionally ingests fixtures, writes JSON + Markdown artifacts | CI uses retrieval on PRs; RAG/code on main/scheduled/manual when credentials exist |
+| Retrieval quality | `pytest -m eval` / `python -m tests.eval.harness` | Production retrieval over `tests/eval/queries.json`; includes local, global, relational, and negative questions | Opt-in; skips when Qdrant/embedder/reranker are absent |
+| RAGAS-style golden eval | `python -m evals.run_ragas` | Golden skill queries over `evals/golden.jsonl`; LLM-judged faithfulness and answer quality | CI via unified harness on main/scheduled/manual when `DEEPINFRA_API_KEY` is configured |
+| Code retrieval eval | `python -m evals.run_code_eval` | Golden-set nDCG/recall and pairwise answer preference | CI via unified harness on main/scheduled/manual when `DEEPINFRA_API_KEY` is configured |
+
+The preferred entrypoint is:
+
+```bash
+uv run nexus eval run --suite retrieval
+uv run nexus eval run --suite rag,code --limit 10
+```
+
+Each run writes `artifacts/evals/<run_id>/summary.{json,md}` plus per-suite
+JSON. Suite defaults ingest the Nexus repo for retrieval and the Forge seed
+skills fixture for RAG/code unless `--no-ingest-fixture` is passed.
 
 ### Retrieval Eval (`tests/eval/`)
 
 `tests/eval/queries.json` is the authoritative measure of retrieval
-quality. 41 hand-curated queries against this codebase itself, one per
-major module. Each entry:
+quality. It contains hand-curated queries against this codebase itself,
+including exact symbol lookup, global architecture questions, graph/retrieval
+questions, and negative capability questions. Each entry:
 
 ```json
 {
@@ -771,7 +820,7 @@ Floors live in `queries.json._meta`:
 "min_mrr":          0.35
 ```
 
-Both are conservative starting points. Bump as the pipeline materially
+Both are conservative starting points. Bump as the evidence engine materially
 improves. Run via:
 
 ```bash
@@ -781,7 +830,7 @@ uv run python -m tests.eval.harness --product <pid>  # standalone CLI
 
 The CLI exits non-zero when either floor is violated — drops into CI
 cleanly. Re-run after any change to chunking, optional enrichment, hybrid,
-rerank, or repo map.
+rerank, repo map, graph extraction, exact grep, or evidence assembly.
 
 Qdrant with native TurboQuant is the only vector-index path. Eval compares the
 current stack against the floors in `queries.json._meta`.

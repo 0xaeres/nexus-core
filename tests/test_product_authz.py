@@ -1,17 +1,13 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from pathlib import Path
 
-import jwt
-import pytest
-from cryptography.hazmat.primitives.asymmetric import rsa
 from fastapi.testclient import TestClient
 
 import nexus.api.app as api_app
 from nexus.api.app import app
 from nexus.api.deps import get_auth_store, get_proposal_queue, get_registry, get_skill_store
-from nexus.auth.auth0 import Auth0Error, Auth0Verifier
 from nexus.auth.store import AuthStore
 from nexus.council.queue import ProposalQueue
 from nexus.registry import Registry
@@ -19,80 +15,22 @@ from nexus.skills.models import Citation, SkillProposal
 from nexus.skills.store import SkillStore
 
 
-def _rsa_key():
-    return rsa.generate_private_key(public_exponent=65537, key_size=2048)
-
-
-class _SigningKey:
-    def __init__(self, key):
-        self.key = key.public_key()
-
-
-def _token(key, *, audience: str = "api", issuer: str = "https://tenant.auth0.com/"):
-    now = datetime.now(UTC)
-    return jwt.encode(
-        {
-            "iss": issuer,
-            "aud": audience,
-            "sub": "auth0|user-1",
-            "email": "dev@example.com",
-            "name": "Dev User",
-            "iat": int(now.timestamp()),
-            "exp": int((now + timedelta(minutes=5)).timestamp()),
-        },
-        key,
-        algorithm="RS256",
-        headers={"kid": "test"},
-    )
-
-
-def test_auth0_verifier_accepts_valid_rs256_token(monkeypatch) -> None:
-    key = _rsa_key()
-    verifier = Auth0Verifier(
-        domain="tenant.auth0.com",
-        audience="api",
-        issuer="https://tenant.auth0.com/",
-    )
-    monkeypatch.setattr(
-        verifier._jwks, "get_signing_key_from_jwt", lambda _token: _SigningKey(key)
-    )
-
-    claims = verifier.verify(_token(key))
-
-    assert claims.sub == "auth0|user-1"
-    assert claims.email == "dev@example.com"
-
-
-def test_auth0_verifier_rejects_wrong_audience(monkeypatch) -> None:
-    key = _rsa_key()
-    verifier = Auth0Verifier(
-        domain="tenant.auth0.com",
-        audience="api",
-        issuer="https://tenant.auth0.com/",
-    )
-    monkeypatch.setattr(
-        verifier._jwks, "get_signing_key_from_jwt", lambda _token: _SigningKey(key)
-    )
-
-    with pytest.raises(Auth0Error):
-        verifier.verify(_token(key, audience="other-api"))
-
-
-def test_auth0_bootstrap_admin_only_for_matching_email(tmp_path: Path, monkeypatch) -> None:
+def test_bootstrap_admin_from_env_creates_password_user(
+    tmp_path: Path, monkeypatch
+) -> None:
     monkeypatch.setenv("NEXUS_BOOTSTRAP_ADMIN_EMAIL", "owner@example.com")
+    monkeypatch.setenv("NEXUS_BOOTSTRAP_ADMIN_PASSWORD", "correct horse battery staple")
     store = AuthStore(tmp_path / "auth.db", secret_key="secret")
 
-    owner = store.get_or_create_auth0_user(
-        auth_sub="auth0|owner", email="owner@example.com", name="Owner"
-    )
-    pending = store.get_or_create_auth0_user(
-        auth_sub="auth0|dev", email="dev@example.com", name="Dev"
-    )
+    owner = store.get_user_by_email("owner@example.com")
 
+    assert owner is not None
     assert owner["role"] == "admin"
     assert owner["status"] == "approved"
-    assert pending["role"] == "viewer"
-    assert pending["status"] == "pending"
+    login = store.login(
+        email="owner@example.com", password="correct horse battery staple"
+    )
+    assert login.user["id"] == owner["id"]
 
 
 def test_product_owner_can_manage_only_their_product(tmp_path: Path, monkeypatch) -> None:

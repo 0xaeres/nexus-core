@@ -19,7 +19,24 @@ def test_registry_seed_defaults(registry: Registry) -> None:
     user = registry.get_user("admin")
     assert user is not None
     assert user["name"] == "Admin"
-    assert user["role"] == "org_admin"
+    assert user["role"] == "admin"
+
+
+def test_registry_migrates_legacy_user_roles(tmp_path: Path) -> None:
+    db = tmp_path / "registry.db"
+    registry = Registry(db)
+    with sqlite3.connect(db) as conn:
+        conn.execute(
+            "INSERT INTO users (id, name, role, products_js) VALUES (?,?,?,?)",
+            ("u1", "Legacy", "org_admin", "[]"),
+        )
+
+    registry = Registry(db)
+
+    assert registry.get_user("u1")["role"] == "admin"
+    with sqlite3.connect(db) as conn:
+        role = conn.execute("SELECT role FROM users WHERE id = ?", ("u1",)).fetchone()[0]
+    assert role == "admin"
 
 
 def test_registry_backfills_legacy_user_products(tmp_path: Path) -> None:

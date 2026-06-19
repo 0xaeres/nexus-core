@@ -16,6 +16,19 @@ services:
       timeout: 5s
       retries: 5
 
+  falkordb:
+    image: falkordb/falkordb:v4.12.4
+    container_name: nexus-falkordb
+    ports:
+      - "127.0.0.1:6379:6379"
+    volumes:
+      - falkordb_data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -h 127.0.0.1 -p 6379 PING | grep -q PONG"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   langfuse-db:
     image: postgres:16-alpine
     container_name: nexus-langfuse-db
@@ -53,4 +66,5 @@ services:
 
 volumes:
   qdrant_data_v118:
+  falkordb_data:
   langfuse_pg:

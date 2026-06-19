@@ -29,6 +29,8 @@ from nexus.api.authz import assert_product_access, local_fs_enabled, rate_limit
 from nexus.api.deps import get_config_dep, get_registry
 from nexus.auth.token_cipher import TokenCipherError
 from nexus.config import NexusConfig
+from nexus.connectors.confluence import ConfluenceSource, confluence_config_from_source
+from nexus.connectors.jira import JiraSource, jira_config_from_source
 from nexus.connectors.local_fs import LocalFsConfig, LocalFsSource
 from nexus.ingest.models import ResourceRef
 from nexus.ingest.pipeline import IngestStats, run_ingest
@@ -313,6 +315,38 @@ async def _sync_source_contents(
         if src_type == "github":
             roots = await _clone_github_repos(source, q)
             cleanup_dirs.extend(cleanup for _, _, cleanup in roots)
+        elif src_type == "jira":
+            stats = await _ingest_jira_source(
+                product_id=product_id,
+                source=source,
+                registry=registry,
+                config=config,
+                q=q,
+            )
+            await _finish_source_sync(
+                stats=stats,
+                source=source,
+                runtime=runtime,
+                registry=registry,
+                q=q,
+            )
+            return
+        elif src_type == "confluence":
+            stats = await _ingest_confluence_source(
+                product_id=product_id,
+                source=source,
+                registry=registry,
+                config=config,
+                q=q,
+            )
+            await _finish_source_sync(
+                stats=stats,
+                source=source,
+                runtime=runtime,
+                registry=registry,
+                q=q,
+            )
+            return
         elif src_type in ("filesystem", "local_fs"):
             if not local_fs_enabled():
                 await _emit(q, "error", "filesystem sources are disabled")
@@ -333,7 +367,7 @@ async def _sync_source_contents(
                 q,
                 "error",
                 f"Connector type {src_type!r} is not yet wired for sync. "
-                "Currently supported: github, filesystem.",
+                "Currently supported: github, filesystem, jira, confluence.",
             )
             return
 
@@ -361,6 +395,8 @@ async def _sync_source_contents(
             total_stats.resources_failed += stats.resources_failed
             total_stats.chunks_produced += stats.chunks_produced
             total_stats.chunks_indexed += stats.chunks_indexed
+            total_stats.graph_resources_indexed += stats.graph_resources_indexed
+            total_stats.graph_errors += stats.graph_errors
             total_stats.embed_errors += stats.embed_errors
             total_stats.added += stats.added
             total_stats.updated += stats.updated
@@ -393,33 +429,13 @@ async def _sync_source_contents(
                 log.warning("repomap save failed: %s", e)
                 await _emit(q, "warn", f"Repo map save failed: {e} (council will still run)")
 
-        if stats.embed_errors:
-            await _emit(
-                q,
-                "warn",
-                f"{stats.embed_errors} batch(es) failed to embed — "
-                "chunks too large for embedder token limit. "
-                "Raise EMBEDDER_UBATCH for the embedder and re-sync "
-                "(1024 is the M2/8GB default; try 2048 on larger machines).",
-            )
-        await _emit(
-            q,
-            "success" if not stats.embed_errors else "done",
-            (
-                f"Sync complete — added={stats.added}, updated={stats.updated}, "
-                f"removed={stats.removed}, unchanged={stats.unchanged}, "
-                f"failed={stats.resources_failed}, "
-                f"{stats.chunks_indexed} chunks in vector store"
-            ),
+        await _finish_source_sync(
+            stats=stats,
+            source=source,
+            runtime=runtime,
+            registry=registry,
+            q=q,
         )
-
-        if runtime:
-            registry.upsert_source({
-                **runtime,
-                "lastSync": _now(),
-                "resourceCount": stats.resources_seen,
-                "status": "connected",
-            })
 
     except Exception as e:
         log.exception(
@@ -538,6 +554,172 @@ async def _ingest_root(
         await _emit(q, "warn", f"Repo map build failed for {root_label}: {e}")
 
     return stats, rm
+
+
+async def _ingest_jira_source(
+    *,
+    product_id: str,
+    source: dict,
+    registry: Registry,
+    config: NexusConfig,
+    q: asyncio.Queue,
+) -> IngestStats:
+    cfg = jira_config_from_source(source)
+    jira_source = JiraSource(cfg)
+    source_name = source.get("name") or "jira"
+    source_key = f"{source_name}:{jira_source.source_id.removeprefix('jira:')}"
+
+    async def _pipeline_event(event: dict) -> None:
+        payload = dict(event)
+        level = str(payload.pop("level", "stage"))
+        msg = str(payload.pop("msg", ""))
+        await _emit(q, level, msg, source=source_name, **payload)
+
+    await _emit(q, "info", "Searching Jira issues with configured JQL")
+    run_id = registry.start_sync_run(product_id, source_key, _now())
+    try:
+        stats = await run_ingest(
+            product_id=product_id,
+            source=jira_source,
+            config=config,
+            enrich=False,
+            enrichment_mode="disabled",
+            event_sink=_pipeline_event,
+            registry=registry,
+            source_key=source_key,
+        )
+    except Exception:
+        registry.finish_sync_run(
+            run_id,
+            finished_at=_now(),
+            added=0,
+            updated=0,
+            removed=0,
+            unchanged=0,
+            status="error",
+        )
+        raise
+    finally:
+        await jira_source.aclose()
+    registry.finish_sync_run(
+        run_id,
+        finished_at=_now(),
+        added=stats.added,
+        updated=stats.updated,
+        removed=stats.removed,
+        unchanged=stats.unchanged,
+        status="done"
+        if stats.resources_failed == 0 and stats.embed_errors == 0
+        else "partial",
+    )
+    return stats
+
+
+async def _ingest_confluence_source(
+    *,
+    product_id: str,
+    source: dict,
+    registry: Registry,
+    config: NexusConfig,
+    q: asyncio.Queue,
+) -> IngestStats:
+    cfg = confluence_config_from_source(source)
+    confluence_source = ConfluenceSource(cfg)
+    source_name = source.get("name") or "confluence"
+    source_key = f"{source_name}:{confluence_source.source_id.removeprefix('confluence:')}"
+
+    async def _pipeline_event(event: dict) -> None:
+        payload = dict(event)
+        level = str(payload.pop("level", "stage"))
+        msg = str(payload.pop("msg", ""))
+        await _emit(q, level, msg, source=source_name, **payload)
+
+    space_info = (
+        f"spaces: {', '.join(cfg.space_keys)}" if cfg.space_keys else "all spaces"
+    )
+    await _emit(q, "info", f"Fetching Confluence pages ({space_info})")
+    run_id = registry.start_sync_run(product_id, source_key, _now())
+    try:
+        stats = await run_ingest(
+            product_id=product_id,
+            source=confluence_source,
+            config=config,
+            enrich=False,
+            enrichment_mode="disabled",
+            event_sink=_pipeline_event,
+            registry=registry,
+            source_key=source_key,
+        )
+    except Exception:
+        registry.finish_sync_run(
+            run_id,
+            finished_at=_now(),
+            added=0,
+            updated=0,
+            removed=0,
+            unchanged=0,
+            status="error",
+        )
+        raise
+    finally:
+        await confluence_source.aclose()
+    registry.finish_sync_run(
+        run_id,
+        finished_at=_now(),
+        added=stats.added,
+        updated=stats.updated,
+        removed=stats.removed,
+        unchanged=stats.unchanged,
+        status="done"
+        if stats.resources_failed == 0 and stats.embed_errors == 0
+        else "partial",
+    )
+    return stats
+
+
+
+async def _finish_source_sync(
+    *,
+    stats: IngestStats,
+    source: dict,
+    runtime: dict | None,
+    registry: Registry,
+    q: asyncio.Queue,
+) -> None:
+    if stats.embed_errors:
+        await _emit(
+            q,
+            "warn",
+            f"{stats.embed_errors} batch(es) failed to embed — "
+            "chunks too large for embedder token limit. "
+            "Raise EMBEDDER_UBATCH for the embedder and re-sync "
+            "(1024 is the M2/8GB default; try 2048 on larger machines).",
+        )
+    if stats.graph_errors:
+        await _emit(
+            q,
+            "warn",
+            f"{stats.graph_errors} resource(s) failed graph extraction/write; "
+            "vectors remain available and graph will retry next sync.",
+        )
+    await _emit(
+        q,
+        "success" if not stats.embed_errors else "done",
+        (
+            f"Sync complete — added={stats.added}, updated={stats.updated}, "
+            f"removed={stats.removed}, unchanged={stats.unchanged}, "
+            f"failed={stats.resources_failed}, "
+            f"{stats.chunks_indexed} chunks in vector store"
+        ),
+    )
+
+    if runtime:
+        registry.upsert_source({
+            **runtime,
+            "lastSync": _now(),
+            "resourceCount": stats.resources_seen,
+            "status": "connected",
+        })
 
 
 def _github_repo_urls(source: dict) -> list[str]:

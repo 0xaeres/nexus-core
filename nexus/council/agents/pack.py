@@ -12,9 +12,14 @@ import re
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from pathlib import Path
 
 from nexus.config import NexusConfig
-from nexus.council.agents._common import evidence_for_prompt, hits_to_evidence
+from nexus.council.agents._common import (
+    evidence_for_prompt,
+    evidence_set_to_evidence,
+    hits_to_evidence,
+)
 from nexus.council.errors import CouncilIncompleteSkill, CouncilNoEvidence
 from nexus.council.skill_catalog import (
     PRODUCT_SKILL_RETRIEVAL_QUERY,
@@ -40,9 +45,11 @@ from nexus.council.state import (
 )
 from nexus.llm.client import ChatClient, TokenUsage
 from nexus.retrieval.chunk_grep import grep_indexed_chunks, sample_indexed_chunks
+from nexus.retrieval.evidence import retrieve_evidence
 from nexus.retrieval.pipeline import RetrievalContext, retrieve
 from nexus.retrieval.repomap import load_repo_map_for_product, topic_bias_terms
-from nexus.skills.models import SkillCoverage, SkillProposal, compute_confidence
+from nexus.skills.models import Skill, SkillCoverage, SkillProposal, compute_confidence
+from nexus.skills.store import SkillStore
 
 log = logging.getLogger(__name__)
 
@@ -81,18 +88,20 @@ async def planner(
     config: NexusConfig,
     retrieval: RetrievalContext,
     chat: ChatClient,
+    graph_store: object | None = None,
 ) -> dict:
     topic = state["topic"]
     product_id = state["product_id"]
     evidence: list[EvidenceChunk] = []
-    result = await retrieve(
-        ctx=retrieval,
+    result = await _retrieve_pack_evidence(
+        retrieval=retrieval,
         product_id=product_id,
         query=_retrieval_query(topic, suffix=PRODUCT_SKILL_RETRIEVAL_QUERY),
         top_k=20,
-        mode="auto",
+        graph_store=graph_store,
+        skills=await _approved_skills(config, product_id),
     )
-    evidence.extend(hits_to_evidence(result.hits, limit=20))
+    evidence.extend(_pack_result_to_evidence(result, limit=20))
 
     evidence = _select_evidence(evidence, limit=EVIDENCE_CHUNKS_PER_SESSION_CAP)
     if not evidence:
@@ -118,9 +127,17 @@ async def experts(
     *,
     retrieval: RetrievalContext,
     chat: ChatClient,
+    graph_store: object | None = None,
 ) -> dict:
     tasks = [
-        _run_expert(state, name=name, charter=charter, retrieval=retrieval, chat=chat)
+        _run_expert(
+            state,
+            name=name,
+            charter=charter,
+            retrieval=retrieval,
+            graph_store=graph_store,
+            chat=chat,
+        )
         for name, charter in _EXPERTS
     ]
     results = await asyncio.gather(*tasks)
@@ -158,6 +175,8 @@ async def expert(
     name: str,
     retrieval: RetrievalContext,
     chat: ChatClient,
+    config: NexusConfig | None = None,
+    graph_store: object | None = None,
 ) -> dict:
     charter = _expert_charter(name)
     report, fresh, usage = await _run_expert(
@@ -165,6 +184,8 @@ async def expert(
         name=name,
         charter=charter,
         retrieval=retrieval,
+        graph_store=graph_store,
+        skills=(await _approved_skills(config, state["product_id"])) if config else [],
         chat=chat,
         stream=True,
     )
@@ -189,17 +210,20 @@ async def _run_expert(
     charter: str,
     retrieval: RetrievalContext,
     chat: ChatClient,
+    graph_store: object | None = None,
+    skills: list[Skill] | None = None,
     stream: bool = False,
 ) -> tuple[ExpertReport, list[EvidenceChunk], TokenUsage]:
     query = _retrieval_query(state["topic"], suffix=f"{name} {charter}")
-    result = await retrieve(
-        ctx=retrieval,
+    result = await _retrieve_pack_evidence(
+        retrieval=retrieval,
         product_id=state["product_id"],
         query=query,
         top_k=8,
-        mode="auto",
+        graph_store=graph_store,
+        skills=skills or [],
     )
-    fresh = hits_to_evidence(result.hits, limit=8)
+    fresh = _pack_result_to_evidence(result, limit=8)
     payload, usage = await chat.chat_json(
         [
             {
@@ -1395,6 +1419,53 @@ def _retrieval_query(topic: str, *, suffix: str = "", limit: int = 900) -> str:
     return text[:limit].strip() or suffix.strip() or topic[:limit].strip()
 
 
+async def _retrieve_pack_evidence(
+    *,
+    retrieval: RetrievalContext,
+    product_id: str,
+    query: str,
+    top_k: int,
+    graph_store: object | None = None,
+    skills: list[Skill] | None = None,
+):
+    return await retrieve_evidence(
+        ctx=retrieval,
+        product_id=product_id,
+        query=query,
+        top_k=top_k,
+        mode="auto",
+        graph_store=graph_store,
+        skills=skills or [],
+    )
+
+
+def _pack_result_to_evidence(result, *, limit: int) -> list[EvidenceChunk]:
+    if hasattr(result, "candidates"):
+        return evidence_set_to_evidence(result, limit=limit)
+    return hits_to_evidence(result.hits, limit=limit)
+
+
+async def _approved_skills(config: NexusConfig | None, product_id: str) -> list[Skill]:
+    if config is None:
+        return []
+    try:
+        root = Path(config.hierarchy_root)
+        if not root.is_absolute():
+            root = Path.cwd() / root
+
+        def _load() -> list[Skill]:
+            return [
+                skill
+                for skill in SkillStore(root).iter_skills()
+                if skill.product == product_id
+            ]
+
+        return await asyncio.to_thread(_load)
+    except Exception as e:
+        log.debug("skill lookup skipped for evidence retrieval: %s", e)
+        return []
+
+
 def _add_usage(left: TokenUsage, right: TokenUsage) -> TokenUsage:
     return TokenUsage(
         prompt=left.prompt + right.prompt,
@@ -1404,8 +1475,10 @@ def _add_usage(left: TokenUsage, right: TokenUsage) -> TokenUsage:
 
 def _no_evidence_error(result, config: NexusConfig) -> CouncilNoEvidence:
     gate = config.ingestion.quality_gate_threshold
-    if result is not None and result.seed_count and result.filtered_by_gate:
-        best = result.best_score_before_gate
+    seed_count = getattr(result, "seed_count", 0)
+    filtered_by_gate = getattr(result, "filtered_by_gate", 0)
+    if result is not None and seed_count and filtered_by_gate:
+        best = getattr(result, "best_score_before_gate", None)
         best_text = "unknown" if best is None else f"{best:.3g}"
         return CouncilNoEvidence(
             user_message=(
@@ -1416,6 +1489,15 @@ def _no_evidence_error(result, config: NexusConfig) -> CouncilNoEvidence:
                 f"quality_gate_threshold={gate:g} filtered all reranked hits "
                 f"(best_score={best_text})"
             ),
+        )
+    coverage = getattr(result, "coverage", None)
+    if coverage is not None and getattr(coverage, "missing_facets", None):
+        return CouncilNoEvidence(
+            user_message=(
+                "Council stopped before planning because the evidence engine could not "
+                "cover the requested product context."
+            ),
+            detail=f"missing evidence facets: {', '.join(coverage.missing_facets)}",
         )
     return CouncilNoEvidence(
         user_message=(

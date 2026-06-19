@@ -33,3 +33,42 @@ async def test_auto_retrieval_embeds_code_and_text_queries(monkeypatch) -> None:
 
     assert result.hits == []
     assert embedder.calls == ["dense_code", "dense_text"]
+
+
+@pytest.mark.asyncio
+async def test_hybrid_search_includes_product_scoped_graph_node_hits() -> None:
+    class FakeIndexer:
+        async def search_dense(self, **kwargs):
+            return []
+
+        async def search_sparse(self, **kwargs):
+            return []
+
+        async def search_by_graph_nodes(self, **kwargs):
+            assert kwargs["product_id"] == "p"
+            assert kwargs["graph_node_ids"] == ["node:1"]
+            assert kwargs["vector_kind"] in {"code", "text"}
+            return [
+                {
+                    "id": f"hit-{kwargs['vector_kind']}",
+                    "score": 1.0,
+                    "payload": {
+                        "product_id": "p",
+                        "graph_node_ids": ["node:1"],
+                    },
+                }
+            ]
+
+    ctx = SimpleNamespace(indexer=FakeIndexer())
+
+    hits = await pipeline._hybrid_search(
+        ctx=ctx,
+        product_id="p",
+        query_vectors={"code": [1.0], "text": [2.0]},
+        sparse_query="auth",
+        vector_kinds=["code", "text"],
+        graph_node_ids=["node:1"],
+    )
+
+    assert {hit.id for hit in hits} == {"hit-code", "hit-text"}
+    assert all(hit.source == "graph" for hit in hits)

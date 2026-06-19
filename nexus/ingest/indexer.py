@@ -97,43 +97,27 @@ class Indexer:
         )
         existing = {c.name for c in collections.collections}
         for name in (self._code, self._text):
-            if name in existing:
-                continue
-            await self._retry_qdrant(
-                f"create_collection:{name}",
-                lambda name=name: self.client.create_collection(
-                    collection_name=name,
-                    vectors_config={
-                        "dense": qm.VectorParams(
-                            size=self._dim,
-                            distance=qm.Distance.COSINE,
-                            hnsw_config=qm.HnswConfigDiff(m=16, ef_construct=128),
-                            quantization_config=self._dense_quantization_config(),
-                        ),
-                    },
-                    sparse_vectors_config={
-                        "bm25": qm.SparseVectorParams(
-                            modifier=qm.Modifier.IDF,
-                        ),
-                    },
-                ),
-            )
-            await self._retry_qdrant(
-                f"create_payload_index:{name}:product_id",
-                lambda name=name: self.client.create_payload_index(
-                    collection_name=name,
-                    field_name="product_id",
-                    field_schema=qm.PayloadSchemaType.KEYWORD,
-                ),
-            )
-            await self._retry_qdrant(
-                f"create_payload_index:{name}:resource_uri",
-                lambda name=name: self.client.create_payload_index(
-                    collection_name=name,
-                    field_name="resource_uri",
-                    field_schema=qm.PayloadSchemaType.KEYWORD,
-                ),
-            )
+            if name not in existing:
+                await self._retry_qdrant(
+                    f"create_collection:{name}",
+                    lambda name=name: self.client.create_collection(
+                        collection_name=name,
+                        vectors_config={
+                            "dense": qm.VectorParams(
+                                size=self._dim,
+                                distance=qm.Distance.COSINE,
+                                hnsw_config=qm.HnswConfigDiff(m=16, ef_construct=128),
+                                quantization_config=self._dense_quantization_config(),
+                            ),
+                        },
+                        sparse_vectors_config={
+                            "bm25": qm.SparseVectorParams(
+                                modifier=qm.Modifier.IDF,
+                            ),
+                        },
+                    ),
+                )
+            await self._ensure_payload_indexes(name)
 
     # ------------------------------------------------------------ write
 
@@ -144,6 +128,12 @@ class Indexer:
         sparse_by_id: dict[str, SparseVector] | None = None,
         source_key: str | None = None,
         content_hash_by_id: dict[str, str] | None = None,
+        graph_node_ids_by_id: dict[str, list[str]] | None = None,
+        entity_ids_by_id: dict[str, list[str]] | None = None,
+        source_ref_by_id: dict[str, dict] | None = None,
+        citation_anchor_by_id: dict[str, str] | None = None,
+        graph_extraction_version_by_id: dict[str, str] | None = None,
+        artifact_type_by_id: dict[str, str] | None = None,
         embedding_version: str | None = None,
         indexed_at: str | None = None,
     ) -> int:
@@ -152,6 +142,12 @@ class Indexer:
             return 0
         sparse_by_id = sparse_by_id or {}
         content_hash_by_id = content_hash_by_id or {}
+        graph_node_ids_by_id = graph_node_ids_by_id or {}
+        entity_ids_by_id = entity_ids_by_id or {}
+        source_ref_by_id = source_ref_by_id or {}
+        citation_anchor_by_id = citation_anchor_by_id or {}
+        graph_extraction_version_by_id = graph_extraction_version_by_id or {}
+        artifact_type_by_id = artifact_type_by_id or {}
         buckets: dict[tuple[str, str], list[qm.PointStruct]] = {}
         for ec in embedded:
             coll = self._code if ec.vector_name == "dense_code" else self._text
@@ -160,6 +156,12 @@ class Indexer:
                 sparse_by_id.get(ec.chunk.id),
                 source_key=source_key,
                 content_hash=content_hash_by_id.get(ec.chunk.id),
+                graph_node_ids=graph_node_ids_by_id.get(ec.chunk.id),
+                entity_ids=entity_ids_by_id.get(ec.chunk.id),
+                source_ref=source_ref_by_id.get(ec.chunk.id),
+                citation_anchor=citation_anchor_by_id.get(ec.chunk.id),
+                graph_extraction_version=graph_extraction_version_by_id.get(ec.chunk.id),
+                artifact_type=artifact_type_by_id.get(ec.chunk.id),
                 embedding_version=embedding_version,
                 indexed_at=indexed_at,
             )
@@ -202,6 +204,49 @@ class Indexer:
             deleted += len(unique_ids)
         return deleted
 
+    async def update_payloads(
+        self,
+        chunks: Sequence[Chunk],
+        *,
+        graph_node_ids_by_id: dict[str, list[str]] | None = None,
+        entity_ids_by_id: dict[str, list[str]] | None = None,
+        source_ref_by_id: dict[str, dict] | None = None,
+        citation_anchor_by_id: dict[str, str] | None = None,
+        graph_extraction_version_by_id: dict[str, str] | None = None,
+        artifact_type_by_id: dict[str, str] | None = None,
+    ) -> int:
+        """Patch graph-derived payload metadata without rewriting vectors."""
+        graph_node_ids_by_id = graph_node_ids_by_id or {}
+        entity_ids_by_id = entity_ids_by_id or {}
+        source_ref_by_id = source_ref_by_id or {}
+        citation_anchor_by_id = citation_anchor_by_id or {}
+        graph_extraction_version_by_id = graph_extraction_version_by_id or {}
+        artifact_type_by_id = artifact_type_by_id or {}
+
+        updated = 0
+        for chunk in chunks:
+            payload = {
+                "graph_node_ids": graph_node_ids_by_id.get(chunk.id, []),
+                "entity_ids": entity_ids_by_id.get(chunk.id, []),
+                "source_ref": source_ref_by_id.get(chunk.id, {}),
+                "citation_anchor": citation_anchor_by_id.get(chunk.id, chunk.anchor),
+                "graph_extraction_version": graph_extraction_version_by_id.get(
+                    chunk.id
+                ),
+                "artifact_type": artifact_type_by_id.get(chunk.id, chunk.kind.value),
+            }
+            collection = self._code if chunk.kind.value == "code" else self._text
+            await self._retry_qdrant(
+                f"set_payload:{collection}",
+                lambda collection=collection, payload=payload, chunk_id=chunk.id: self.client.set_payload(
+                    collection_name=collection,
+                    payload=payload,
+                    points=[chunk_id],
+                ),
+            )
+            updated += 1
+        return updated
+
     # ------------------------------------------------------------ read
 
     async def search_dense(
@@ -243,6 +288,57 @@ class Indexer:
             using="bm25",
             top_k=top_k,
         )
+
+    async def search_by_graph_nodes(
+        self,
+        *,
+        product_id: str,
+        graph_node_ids: Sequence[str],
+        vector_kind: str | None = None,
+        top_k: int = 50,
+    ) -> list[dict]:
+        """Return chunks directly attached to graph nodes, product-scoped."""
+        ids = sorted({gid for gid in graph_node_ids if gid})
+        if not ids:
+            return []
+        collections = []
+        if vector_kind in (None, "code"):
+            collections.append(self._code)
+        if vector_kind in (None, "text"):
+            collections.append(self._text)
+        hits: list[dict] = []
+        for coll in collections:
+            points, _ = await self._retry_qdrant(
+                f"scroll_graph_nodes:{coll}",
+                lambda coll=coll: self.client.scroll(
+                    collection_name=coll,
+                    scroll_filter=qm.Filter(
+                        must=[
+                            qm.FieldCondition(
+                                key="product_id",
+                                match=qm.MatchValue(value=product_id),
+                            ),
+                            qm.FieldCondition(
+                                key="graph_node_ids",
+                                match=qm.MatchAny(any=ids),
+                            ),
+                        ]
+                    ),
+                    limit=top_k,
+                    with_payload=True,
+                    with_vectors=False,
+                ),
+            )
+            hits.extend(
+                {
+                    "id": pt.id,
+                    "score": 1.0,
+                    "payload": pt.payload,
+                    "collection": coll,
+                }
+                for pt in points
+            )
+        return hits[:top_k]
 
     async def _search(
         self,
@@ -422,6 +518,29 @@ class Indexer:
             f"qdrant {operation} failed after retries: {_exception_detail(last_exc)}"
         ) from last_exc
 
+    async def _ensure_payload_indexes(self, collection: str) -> None:
+        indexes = {
+            "product_id": qm.PayloadSchemaType.KEYWORD,
+            "resource_uri": qm.PayloadSchemaType.KEYWORD,
+            "graph_node_ids": qm.PayloadSchemaType.KEYWORD,
+            "entity_ids": qm.PayloadSchemaType.KEYWORD,
+            "artifact_type": qm.PayloadSchemaType.KEYWORD,
+            "source_ref.resource_uri": qm.PayloadSchemaType.KEYWORD,
+        }
+        for field_name, field_schema in indexes.items():
+            try:
+                await self._retry_qdrant(
+                    "create_payload_index",
+                    lambda collection=collection, field_name=field_name, field_schema=field_schema: self.client.create_payload_index(
+                        collection_name=collection,
+                        field_name=field_name,
+                        field_schema=field_schema,
+                    ),
+                )
+            except Exception as e:
+                if "already" not in str(e).lower():
+                    raise
+
     # ------------------------------------------------------------ helpers
 
     def _dense_quantization_config(self) -> qm.QuantizationConfig | None:
@@ -459,6 +578,12 @@ class Indexer:
         *,
         source_key: str | None = None,
         content_hash: str | None = None,
+        graph_node_ids: list[str] | None = None,
+        entity_ids: list[str] | None = None,
+        source_ref: dict | None = None,
+        citation_anchor: str | None = None,
+        graph_extraction_version: str | None = None,
+        artifact_type: str | None = None,
         embedding_version: str | None = None,
         indexed_at: str | None = None,
     ) -> qm.PointStruct:
@@ -485,5 +610,11 @@ class Indexer:
                 "end_line": c.end_line,
                 "context_path": c.context_path,
                 "content": c.content,
+                "graph_node_ids": graph_node_ids or [],
+                "entity_ids": entity_ids or [],
+                "source_ref": source_ref or {},
+                "citation_anchor": citation_anchor or c.anchor,
+                "graph_extraction_version": graph_extraction_version,
+                "artifact_type": artifact_type or c.kind.value,
             },
         )

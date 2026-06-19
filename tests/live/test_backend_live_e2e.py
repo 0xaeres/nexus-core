@@ -10,6 +10,7 @@ Required live services/config:
   - Qdrant reachable at `vector_store.url`
   - embedder reachable at `models.embedding.url`
   - reranker reachable at `models.reranker.url`
+  - FalkorDB reachable at `graph_store.host:graph_store.port`
   - council/light LLM credentials configured
 """
 
@@ -17,6 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import socket
 import time
 import uuid
 from datetime import UTC, datetime
@@ -25,9 +27,10 @@ from pathlib import Path
 import httpx
 import pytest
 from fastapi.testclient import TestClient
+from git import Repo
 
 from nexus.api.app import app
-from nexus.api.deps import get_config_dep, get_proposal_queue
+from nexus.api.deps import get_config_dep, get_proposal_queue, get_registry
 from nexus.config import NexusConfig
 from nexus.connectors.local_fs import LocalFsConfig, LocalFsSource
 from nexus.council.queue import ProposalQueue
@@ -48,6 +51,7 @@ def test_live_backend_e2e_ingest_council_review_flows(tmp_path: Path) -> None:
 
     product_id = f"live-e2e-qdrant-{uuid.uuid4().hex[:8]}"
     source_root = _write_fixture_product(tmp_path / "fixture-product")
+    _init_live_skills_repo(config.hierarchy_root)
     registry = Registry(tmp_path / "registry.db")
     queue = ProposalQueue(config.storage.proposal_queue)
 
@@ -105,8 +109,39 @@ def test_live_backend_e2e_ingest_council_review_flows(tmp_path: Path) -> None:
 
     app.dependency_overrides[get_proposal_queue] = lambda: queue
     app.dependency_overrides[get_config_dep] = lambda: config
+    app.dependency_overrides[get_registry] = lambda: registry
     try:
         client = TestClient(app)
+
+        agent_res = client.post(
+            f"/products/{product_id}/agent/messages",
+            json={
+                "message": "Explain ledger API retrieval architecture and testing guardrails",
+                "mode": "drift_lite",
+                "top_k": 6,
+            },
+        )
+        assert agent_res.status_code == 200, agent_res.text
+        agent_body = agent_res.json()
+        assert agent_body["product_id"] == product_id
+        assert agent_body["session_id"]
+        assert agent_body["citations"], agent_body
+        assert agent_body["coverage"]["sufficient"] is True
+        assert agent_body["query_plan"]["mode"] == "drift_lite"
+        assert agent_body["query_plan"]["latency_ms"] >= 0
+        assert any(step["channel"] == "query_plan" for step in agent_body["trace"])
+        assert all(step["product_id"] == product_id for step in agent_body["trace"])
+
+        replay_res = client.get(
+            f"/products/{product_id}/agent/sessions/{agent_body['session_id']}"
+        )
+        assert replay_res.status_code == 200, replay_res.text
+        replay = replay_res.json()
+        assert replay["product_id"] == product_id
+        assert [message["role"] for message in replay["messages"]] == [
+            "user",
+            "assistant",
+        ]
 
         master = next(p for p in pending if p["tier"] == "product_master")
         approve_res = client.post(
@@ -114,8 +149,10 @@ def test_live_backend_e2e_ingest_council_review_flows(tmp_path: Path) -> None:
             json={"actor": "live-e2e@nexus.local"},
         )
         assert approve_res.status_code == 200, approve_res.text
-        assert approve_res.json()["ok"] is True
-        assert (config.hierarchy_root / product_id / master["name"] / "SKILL.md").exists()
+        approve_body = approve_res.json()
+        assert approve_body["ok"] is True
+        assert (config.hierarchy_root / approve_body["path"]).exists()
+        assert approve_body["skill_index_status"] in {"indexed", "pending"}
         assert queue.get(master["id"])["status"] == "approved"
 
         reject_target = next(p for p in pending if p["id"] != master["id"])
@@ -129,6 +166,7 @@ def test_live_backend_e2e_ingest_council_review_flows(tmp_path: Path) -> None:
     finally:
         app.dependency_overrides.pop(get_proposal_queue, None)
         app.dependency_overrides.pop(get_config_dep, None)
+        app.dependency_overrides.pop(get_registry, None)
 
 
 def _require_live_e2e() -> None:
@@ -184,6 +222,25 @@ def _require_infra(config: NexusConfig) -> None:
             time.sleep(1.0)
         if last_error is not None:
             pytest.fail(f"{name} live infra unreachable at {url}: {last_error}")
+    _require_tcp(
+        "falkordb",
+        config.graph_store.host,
+        config.graph_store.port,
+        timeout_s=45,
+    )
+
+
+def _require_tcp(name: str, host: str, port: int, *, timeout_s: int) -> None:
+    last_error: Exception | None = None
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        try:
+            with socket.create_connection((host, port), timeout=3.0):
+                return
+        except Exception as e:
+            last_error = e
+        time.sleep(1.0)
+    pytest.fail(f"{name} live infra unreachable at {host}:{port}: {last_error}")
 
 
 def _write_fixture_product(root: Path) -> Path:
@@ -321,6 +378,14 @@ Patterns to avoid:
         encoding="utf-8",
     )
     return root
+
+
+def _init_live_skills_repo(root: Path) -> None:
+    root.mkdir(parents=True, exist_ok=True)
+    repo = Repo.init(root)
+    with repo.config_writer() as writer:
+        writer.set_value("user", "name", "Nexus Live E2E")
+        writer.set_value("user", "email", "live-e2e@nexus.local")
 
 
 async def _vector_counts(config: NexusConfig, product_id: str) -> dict[str, int]:

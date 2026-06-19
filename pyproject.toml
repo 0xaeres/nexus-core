@@ -4,7 +4,7 @@ version = "0.0.1"
 description = "Sovereign, MCP-native skill server for codebases"
 requires-python = ">=3.13"
 readme = "README.md"
-license = { text = "MIT" }
+license = { text = "Apache-2.0" }
 authors = [{ name = "Nexus" }]
 
 dependencies = [
@@ -18,12 +18,13 @@ dependencies = [
     "pydantic>=2.9",
     "pydantic-settings>=2.6",
     "pyyaml>=6.0",
-    "pyjwt[crypto]>=2.10",
     "python-dotenv>=1.0",
     "argon2-cffi>=23.1",
     # Storage
     "qdrant-client>=1.18,<1.19",
+    "falkordb>=1.6,<2",
     "neo4j>=5.25",
+    "redis>=7.1,<8",
     # MCP
     "mcp>=1.0",
     # Council orchestration

@@ -5,7 +5,6 @@ from __future__ import annotations
 import logging
 from functools import lru_cache
 
-from nexus.auth.auth0 import Auth0Verifier
 from nexus.auth.store import AuthStore
 from nexus.config import NexusConfig, get_config
 from nexus.council.queue import ProposalQueue
@@ -39,11 +38,6 @@ def get_setup_kv() -> SetupKV:
 def get_auth_store() -> AuthStore:
     config: NexusConfig = get_config()
     return AuthStore(config.storage.proposal_queue.parent / "registry.db")
-
-
-@lru_cache(maxsize=1)
-def get_auth0_verifier() -> Auth0Verifier:
-    return Auth0Verifier()
 
 
 def resolve_skills_repo_url(

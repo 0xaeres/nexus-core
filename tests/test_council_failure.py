@@ -44,6 +44,14 @@ class FakeChat:
         pass
 
 
+class FakeGraphStore:
+    async def ensure_schema(self) -> None:
+        pass
+
+    async def aclose(self) -> None:
+        pass
+
+
 @pytest.mark.asyncio
 async def test_council_handles_use_role_specific_models(tmp_path: Path, monkeypatch) -> None:
     seen: dict[str, str] = {}
@@ -57,6 +65,7 @@ async def test_council_handles_use_role_specific_models(tmp_path: Path, monkeypa
 
     monkeypatch.setattr(council_graph.RetrievalContext, "from_config", fake_from_config)
     monkeypatch.setattr(council_graph.ChatClient, "from_cfg", fake_from_cfg)
+    monkeypatch.setattr(council_graph, "create_graph_store", lambda _config: FakeGraphStore())
 
     async with council_graph.council_handles(_config(tmp_path)):
         pass
@@ -68,6 +77,7 @@ async def test_council_handles_use_role_specific_models(tmp_path: Path, monkeypa
         "architect": "critic-model",
         "domain_expert": "critic-model",
         "quality_expert": "critic-model",
+        "synthesizer": "draft-model",
     }
 
 

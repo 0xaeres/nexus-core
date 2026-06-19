@@ -14,10 +14,12 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel
 
-from nexus.api.authz import auth_enabled, auth_mode, prod_enabled
-from nexus.api.deps import get_auth0_verifier, get_auth_store, get_config_dep, get_registry
+from nexus.api.authz import auth_enabled, prod_enabled
+from nexus.api.deps import get_auth_store, get_config_dep, get_registry
 from nexus.api.routes import (
+    agent,
     auth,
     council,
     dashboard,
@@ -27,8 +29,8 @@ from nexus.api.routes import (
     skills,
     sources,
 )
-from nexus.auth.auth0 import Auth0Error
 from nexus.auth.store import CSRF_COOKIE, SESSION_COOKIE
+from nexus.graph.store import create_graph_store
 from nexus.ingest.enrichment_worker import EnrichmentWorker
 from nexus.logging_config import setup_logging
 
@@ -162,25 +164,6 @@ async def _authenticate_request(request: Request) -> JSONResponse | None:
             request.state.auth_via = "api_key"
             return None
 
-    if auth_mode() == "auth0":
-        if not bearer.startswith(prefix):
-            return JSONResponse({"detail": "authentication required"}, status_code=401)
-        token = bearer.removeprefix(prefix)
-        try:
-            claims = await asyncio.to_thread(get_auth0_verifier().verify, token)
-        except Auth0Error:
-            log.exception("auth0 token validation failed")
-            return JSONResponse({"detail": "invalid bearer token"}, status_code=401)
-        user = get_auth_store().get_or_create_auth0_user(
-            auth_sub=claims.sub,
-            email=claims.email,
-            name=claims.name,
-        )
-        request.state.user = user
-        request.state.auth_via = "auth0"
-        request.state.auth0_claims = claims.raw
-        return None
-
     store = get_auth_store()
     session_token = request.cookies.get(SESSION_COOKIE, "")
     resolved = store.user_for_session(session_token)
@@ -210,8 +193,6 @@ def _auth_enabled() -> bool:
 
 
 def _is_public_path(path: str) -> bool:
-    if path == "/auth/request-access" and auth_mode() == "auth0":
-        return False
     public = {
         "/health",
         "/auth/login",
@@ -236,19 +217,15 @@ def _validate_production_config() -> None:
     if not prod_enabled():
         return
     required_env = [
-        "NEXUS_AUTH_MODE",
         "NEXUS_TOKEN_KEY",
+        "NEXUS_SECRET_KEY",
+        "NEXUS_ADMIN_API_KEY",
         "NEXUS_BOOTSTRAP_ADMIN_EMAIL",
+        "NEXUS_BOOTSTRAP_ADMIN_PASSWORD",
         "NEXUS_ALLOWED_ORIGINS",
         "NEXUS_API_DOMAIN",
     ]
-    if auth_mode() == "auth0":
-        required_env.extend(["AUTH0_DOMAIN", "AUTH0_AUDIENCE"])
-    else:
-        required_env.append("NEXUS_BOOTSTRAP_ADMIN_PASSWORD")
-        if not os.getenv("NEXUS_SECRET_KEY"):
-            required_env.append("NEXUS_SECRET_KEY")
-    missing = [name for name in required_env if not os.getenv(name)]
+    missing = [name for name in required_env if not (os.getenv(name) or "").strip()]
     cfg = get_config_dep()
     if not cfg.skills_repo:
         missing.append("skills_repo/NEXUS_SKILLS_REPO")
@@ -258,12 +235,37 @@ def _validate_production_config() -> None:
         )
 
 
-@app.get("/health", tags=["meta"])
-async def health() -> dict[str, str]:
-    return {"status": "ok"}
+class HealthDependencies(BaseModel):
+    falkordb: str
+
+
+class HealthResponse(BaseModel):
+    status: str
+    dependencies: HealthDependencies
+
+
+@app.get("/health", tags=["meta"], response_model=HealthResponse)
+async def health() -> HealthResponse:
+    try:
+        cfg = get_config_dep()
+        graph_store = create_graph_store(cfg)
+        try:
+            falkor_ok = await graph_store.health()
+        finally:
+            await graph_store.aclose()
+    except Exception as e:
+        log.warning("health config/dependency check failed: %s", e)
+        falkor_ok = False
+    return HealthResponse(
+        status="ok" if falkor_ok else "degraded",
+        dependencies=HealthDependencies(
+            falkordb="ok" if falkor_ok else "unavailable",
+        ),
+    )
 
 
 app.include_router(products.router)
+app.include_router(agent.router)
 app.include_router(auth.router)
 app.include_router(dashboard.router)
 app.include_router(sources.router)

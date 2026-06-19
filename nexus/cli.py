@@ -17,6 +17,9 @@ app = typer.Typer(
 council_app = typer.Typer(help="LLM council commands.", no_args_is_help=True)
 app.add_typer(council_app, name="council")
 
+eval_app = typer.Typer(help="Evaluation harness commands.", no_args_is_help=True)
+app.add_typer(eval_app, name="eval")
+
 
 def _echo_delete_report(report, *, dry_run: bool) -> None:
     prefix = "Would delete" if dry_run else "Deleted"
@@ -269,6 +272,78 @@ def council_draft(
         f"  citations   : {len(proposal.citations)}\n"
         f"  tokens      : prompt={total_prompt}, completion={total_completion}"
     )
+
+
+# ---------------------------------------------------------------- eval
+
+
+@eval_app.command("run")
+def eval_run(
+    suite: str = typer.Option(
+        "all",
+        "--suite",
+        "-s",
+        help="all, retrieval, rag, code, or a comma-separated list.",
+    ),
+    config_path: Path = typer.Option(Path("nexus.yaml"), "--config", "-c"),
+    out_dir: Path = typer.Option(Path("artifacts/evals"), "--out-dir"),
+    product: str | None = typer.Option(
+        None,
+        "--product",
+        "-p",
+        help="Override the suite default product id.",
+    ),
+    fixture: Path | None = typer.Option(
+        None,
+        "--fixture",
+        help="Override the suite default fixture directory.",
+    ),
+    ingest_fixture: bool = typer.Option(
+        True,
+        "--ingest-fixture/--no-ingest-fixture",
+        help="Ingest the suite fixture before scoring.",
+    ),
+    golden: Path = typer.Option(Path("evals/golden.jsonl"), "--golden"),
+    limit: int | None = typer.Option(
+        None,
+        "--limit",
+        help="Limit RAG/code judge items for smoke runs.",
+    ),
+    top_k: int = typer.Option(10, "--top-k", help="Retrieval top-k."),
+) -> None:
+    """Run production eval suites and write JSON/Markdown artifacts."""
+    from evals.harness import parse_suites, render_markdown_summary, run_suites
+    from nexus.config import NexusConfig
+
+    try:
+        suites = parse_suites(suite)
+    except ValueError as e:
+        typer.secho(str(e), fg=typer.colors.RED)
+        raise typer.Exit(code=1) from e
+
+    config = NexusConfig.load(config_path)
+    try:
+        artifact = asyncio.run(
+            run_suites(
+                suites=suites,
+                config=config,
+                config_path=config_path,
+                out_dir=out_dir,
+                product_id=product,
+                fixture_path=fixture,
+                ingest_fixture=ingest_fixture,
+                golden_path=golden,
+                limit=limit,
+                top_k=top_k,
+            )
+        )
+    except Exception as e:
+        typer.secho(f"eval failed: {type(e).__name__}: {e}", fg=typer.colors.RED)
+        raise typer.Exit(code=1) from e
+
+    typer.echo(render_markdown_summary(artifact))
+    if not artifact.passed:
+        raise typer.Exit(code=1)
 
 
 # ---------------------------------------------------------------- daemon

@@ -21,6 +21,12 @@ from pydantic import BaseModel
 from nexus.config import NexusConfig
 from nexus.council.queue import ProposalQueue
 from nexus.council.skill_catalog import fixed_skill_name, product_slug
+from nexus.graph.models import GraphRAGQuery
+from nexus.graph.rag import answer_graph_rag
+from nexus.graph.store import create_graph_store
+from nexus.llm.client import ChatClient
+from nexus.retrieval.chunk_grep import grep_indexed_chunks
+from nexus.retrieval.evidence import EvidenceSet, retrieve_evidence
 from nexus.retrieval.pipeline import RetrievalContext, retrieve
 from nexus.skills.models import Skill
 from nexus.skills.store import SkillStore
@@ -40,6 +46,9 @@ class ToolState:
     product: str
     config: NexusConfig
     _ctx: RetrievalContext | None = None
+    _graph_store: object | None = None
+    _graph_store_loaded: bool = False
+    _graphrag_chat: ChatClient | None = None
     _store: SkillStore | None = None
     _queue: ProposalQueue | None = None
     _outcomes: list[dict] = field(default_factory=list)
@@ -49,6 +58,22 @@ class ToolState:
         if self._ctx is None:
             self._ctx = RetrievalContext.from_config(self.config)
         return self._ctx
+
+    @property
+    def graph_store(self):
+        if not self._graph_store_loaded:
+            self._graph_store = create_graph_store(self.config)
+            self._graph_store_loaded = True
+        return self._graph_store
+
+    @property
+    def graphrag_chat(self) -> ChatClient:
+        if self._graphrag_chat is None:
+            self._graphrag_chat = ChatClient.from_cfg(
+                self.config.models.council,
+                role="graphrag",
+            )
+        return self._graphrag_chat
 
     @property
     def store(self) -> SkillStore:
@@ -64,6 +89,20 @@ class ToolState:
         if self._queue is None:
             self._queue = ProposalQueue(Path(self.config.storage.proposal_queue))
         return self._queue
+
+    async def aclose(self) -> None:
+        closers = []
+        if self._ctx is not None:
+            closers.append(self._ctx.aclose)
+        if self._graph_store is not None and hasattr(self._graph_store, "aclose"):
+            closers.append(self._graph_store.aclose)
+        if self._graphrag_chat is not None:
+            closers.append(self._graphrag_chat.aclose)
+        for close in closers:
+            try:
+                await close()
+            except Exception:
+                log.exception("tool state close failed")
 
 
 # ---------------------------------------------------------------- guidance tools
@@ -198,7 +237,44 @@ async def query_code_context(
         top_k=10,
         mode="code",
     )
-    return _render_retrieval(result)
+    rendered = _render_retrieval(result)
+    if file_glob and file_glob != "**/*":
+        rendered["hits"] = [
+            hit for hit in rendered["hits"] if _matches_file_globs(hit["anchor"].split(":", 1)[0], [file_glob])
+        ]
+    return rendered
+
+
+async def grep_corpus(
+    state: ToolState,
+    *,
+    query: str,
+    product_id: str | None = None,
+    top_k: int = 8,
+) -> dict:
+    """Exact-ish indexed chunk grep. Product-scoped."""
+    if product_id is not None and product_id != state.product:
+        return ToolError(error="cross-product corpus search is not allowed").model_dump(
+            exclude_none=True
+        )
+    hits = await grep_indexed_chunks(
+        indexer=state.ctx.indexer,
+        product_id=state.product,
+        query=query,
+        limit=top_k,
+    )
+    return {
+        "query": query,
+        "hits": [
+            {
+                "score": hit.score,
+                "anchor": f"{hit.file}:{hit.line}",
+                "content": hit.excerpt,
+                "source": "grep",
+            }
+            for hit in hits
+        ],
+    }
 
 
 async def hybrid_search_corpus(
@@ -218,6 +294,63 @@ async def hybrid_search_corpus(
         ctx=state.ctx, product_id=pid, query=query, top_k=top_k, mode="auto"
     )
     return _render_retrieval(result)
+
+
+async def evidence_search_corpus(
+    state: ToolState,
+    *,
+    query: str,
+    product_id: str | None = None,
+    top_k: int = 10,
+    current_file: str | None = None,
+    mode: str = "auto",
+) -> dict:
+    """EvidenceGraphRAG retrieval across hybrid, grep, repo-map, graph, and skills."""
+    if product_id is not None and product_id != state.product:
+        return ToolError(error="cross-product corpus search is not allowed").model_dump(
+            exclude_none=True
+        )
+    result = await retrieve_evidence(
+        ctx=state.ctx,
+        graph_store=state.graph_store,
+        product_id=state.product,
+        query=query,
+        top_k=top_k,
+        current_file=current_file,
+        query_mode=mode,  # type: ignore[arg-type]
+        skills=[s for s in state.store.iter_skills() if s.product == state.product],
+    )
+    return _render_evidence_set(result)
+
+
+async def ask_product_graph(
+    state: ToolState,
+    *,
+    query: str,
+    history: list[dict] | None = None,
+    current_file: str | None = None,
+    max_depth: int = 3,
+    top_k: int = 8,
+    mode: str = "auto",
+    synthesize: bool = True,
+) -> dict:
+    """Generic product GraphRAG: graph expansion + cited evidence + answer."""
+    chat = state.graphrag_chat if synthesize else None
+    answer = await answer_graph_rag(
+        ctx=state.ctx,
+        graph_store=state.graph_store,
+        chat=chat,
+        product_id=state.product,
+        request=GraphRAGQuery(
+            query=query,
+            history=history or [],
+            current_file=current_file,
+            mode=mode,  # type: ignore[arg-type]
+            max_depth=max_depth,
+            top_k=top_k,
+        ),
+    )
+    return answer.model_dump(mode="json")
 
 
 # ---------------------------------------------------------------- resource helpers
@@ -337,5 +470,28 @@ def _render_retrieval(result) -> dict:
                 "content": (h.payload or {}).get("content"),
             }
             for h in result.hits
+        ],
+    }
+
+
+def _render_evidence_set(result: EvidenceSet) -> dict:
+    return {
+        "query": result.query,
+        "shape": result.understanding.shape,
+        "coverage": result.coverage.model_dump(mode="json"),
+        "reranked": result.reranked,
+        "trace": [step.model_dump(mode="json") for step in result.trace],
+        "hits": [
+            {
+                "score": candidate.score,
+                "source": candidate.channel,
+                "role": candidate.role,
+                "anchor": candidate.anchor,
+                "context_path": candidate.context_path,
+                "content": candidate.excerpt,
+                "graph_node_ids": candidate.graph_node_ids,
+                "metadata": candidate.metadata,
+            }
+            for candidate in result.candidates
         ],
     }

@@ -116,6 +116,39 @@ class FakeIndexer:
         pass
 
 
+class FakeGraphStore:
+    instances: ClassVar[list[FakeGraphStore]] = []
+
+    def __init__(self):
+        self.upserted = []
+        self.retired = []
+        self.closed = False
+        FakeGraphStore.instances.append(self)
+
+    async def ensure_schema(self) -> None:
+        pass
+
+    async def upsert_resource_graph(self, extraction, *, previous_fact_ids=None):
+        self.upserted.append((extraction, list(previous_fact_ids or [])))
+        return extraction.fact_ids
+
+    async def retire_resource_graph(self, *, product_id: str, fact_ids: list[str]):
+        self.retired.append((product_id, list(fact_ids)))
+        return len(fact_ids)
+
+    async def delete_product(self, *, product_id: str):
+        return 0
+
+    async def resolve_entity(self, **kwargs):
+        raise NotImplementedError
+
+    async def traverse(self, **kwargs):
+        raise NotImplementedError
+
+    async def aclose(self) -> None:
+        self.closed = True
+
+
 async def _fake_sparse(texts):
     return [SparseVector(indices=[1], values=[1.0]) for _ in texts]
 
@@ -128,9 +161,11 @@ def _patch_ingest(monkeypatch):
     FakeEmbedder.delay_s = 0.0
     FakeEnricher.calls = 0
     FakeIndexer.instances = []
+    FakeGraphStore.instances = []
     monkeypatch.setattr(pipeline, "EmbedderClient", FakeEmbedder)
     monkeypatch.setattr(pipeline, "ContextualEnricher", FakeEnricher)
     monkeypatch.setattr(pipeline, "create_indexer", lambda config: FakeIndexer())
+    monkeypatch.setattr(pipeline, "create_graph_store", lambda config: FakeGraphStore())
     monkeypatch.setattr(pipeline, "aencode_passages", _fake_sparse)
 
 
@@ -353,3 +388,150 @@ async def test_background_enrichment_skips_code_when_hqe_disabled(
     assert stats.added == 1
     assert FakeEnricher.calls == 0
     assert registry.enrichment_job_counts("p")["pending"] == 0
+
+
+@pytest.mark.asyncio
+async def test_delta_sync_writes_graph_manifest_and_payload_metadata(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    registry = Registry(tmp_path / "registry.db")
+    cfg = _config(tmp_path)
+
+    stats = await pipeline.run_ingest(
+        product_id="p",
+        source=FakeSource(
+            {
+                "app.py": (
+                    "def hello():\n"
+                    "    message = 'world ' * 40\n"
+                    "    normalized = message.strip().upper()\n"
+                    "    return normalized\n"
+                )
+            }
+        ),
+        config=cfg,
+        registry=registry,
+        source_key="source",
+        enrichment_mode="disabled",
+    )
+
+    row = registry.get_resource_manifest("p", "source", "app.py")
+    indexer = FakeIndexer.instances[-1]
+    graph = FakeGraphStore.instances[-1]
+    _, upsert_kwargs = indexer.upserted[0]
+    embedded, _ = indexer.upserted[0]
+
+    assert stats.graph_resources_indexed == 1
+    assert row is not None
+    assert row["graphStatus"] == "complete"
+    assert row["graphExtractionVersion"] == pipeline.graph_extraction_version()
+    assert row["graphFactIds"]
+    assert graph.upserted
+    assert upsert_kwargs["graph_node_ids_by_id"]
+    assert upsert_kwargs["source_ref_by_id"]
+    artifact_types = upsert_kwargs["artifact_type_by_id"]
+    summary_ids = [
+        ec.chunk.id
+        for ec in embedded
+        if ec.chunk.start_line == 0 and ec.chunk.context_path == "Graph summary"
+    ]
+    assert summary_ids
+    assert artifact_types[summary_ids[0]] == "summary"
+
+
+@pytest.mark.asyncio
+async def test_delta_sync_refreshes_stale_graph_without_reembedding(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    registry = Registry(tmp_path / "registry.db")
+    cfg = _config(tmp_path)
+    content = (
+        "def hello():\n"
+        "    message = 'world ' * 40\n"
+        "    normalized = message.strip().upper()\n"
+        "    return normalized\n"
+    )
+    version = pipeline.embedding_version(cfg)
+    registry.upsert_resource_manifest(
+        {
+            "product": "p",
+            "sourceKey": "source",
+            "resourceUri": "app.py",
+            "contentHash": pipeline._content_hash(content),
+            "mime": "text/x-python",
+            "sizeBytes": len(content),
+            "lastSeenSync": "old",
+            "chunkIds": ["old-chunk-id"],
+            "indexedAt": "old",
+            "embeddingVersion": version,
+            "graphExtractionVersion": "old",
+            "graphStatus": "failed",
+            "graphFactIds": ["old-fact-id"],
+            "graphIndexedAt": "old",
+        }
+    )
+    stats = await pipeline.run_ingest(
+        product_id="p",
+        source=FakeSource({"app.py": content}),
+        config=cfg,
+        registry=registry,
+        source_key="source",
+        enrichment_mode="disabled",
+    )
+
+    row = registry.get_resource_manifest("p", "source", "app.py")
+    graph = FakeGraphStore.instances[-1]
+
+    assert stats.unchanged == 1
+    assert stats.graph_resources_indexed == 1
+    assert FakeEmbedder.calls == 0
+    assert not FakeIndexer.instances[-1].upserted
+    assert graph.upserted[0][1] == ["old-fact-id"]
+    assert row is not None
+    assert row["chunkIds"] == ["old-chunk-id"]
+    assert row["graphStatus"] == "complete"
+
+
+@pytest.mark.asyncio
+async def test_delta_sync_retires_graph_facts_for_removed_resources(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    registry = Registry(tmp_path / "registry.db")
+    cfg = _config(tmp_path)
+    registry.upsert_resource_manifest(
+        {
+            "product": "p",
+            "sourceKey": "source",
+            "resourceUri": "gone.py",
+            "contentHash": "old-hash",
+            "mime": "text/x-python",
+            "sizeBytes": 10,
+            "lastSeenSync": "old",
+            "chunkIds": ["gone-chunk-id"],
+            "indexedAt": "old",
+            "embeddingVersion": pipeline.embedding_version(cfg),
+            "graphExtractionVersion": "old-graph",
+            "graphStatus": "complete",
+            "graphFactIds": ["fact-1", "fact-2"],
+            "graphIndexedAt": "old",
+        }
+    )
+    stats = await pipeline.run_ingest(
+        product_id="p",
+        source=FakeSource({}),
+        config=cfg,
+        registry=registry,
+        source_key="source",
+        enrichment_mode="disabled",
+    )
+
+    graph = FakeGraphStore.instances[-1]
+    indexer = FakeIndexer.instances[-1]
+
+    assert stats.removed == 1
+    assert graph.retired == [("p", ["fact-1", "fact-2"])]
+    assert indexer.deleted == ["gone-chunk-id"]
+    assert registry.get_resource_manifest("p", "source", "gone.py") is None

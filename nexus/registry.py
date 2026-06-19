@@ -17,6 +17,11 @@ log = logging.getLogger(__name__)
 
 # Keys whose values are encrypted at rest in source config blobs.
 _SECRET_KEY_HINTS = ("token", "api_key", "password", "secret")
+_LEGACY_USER_ROLE_MAP = {
+    "org_admin": "admin",
+    "product_admin": "editor",
+    "sme": "viewer",
+}
 
 
 def _now_iso() -> str:
@@ -131,6 +136,10 @@ CREATE TABLE IF NOT EXISTS source_resources (
     embedding_version TEXT NOT NULL DEFAULT '',
     enrichment_version TEXT NOT NULL DEFAULT '',
     enrichment_status TEXT NOT NULL DEFAULT '',
+    graph_extraction_version TEXT NOT NULL DEFAULT '',
+    graph_status TEXT NOT NULL DEFAULT '',
+    graph_fact_ids_js TEXT NOT NULL DEFAULT '[]',
+    graph_indexed_at TEXT NOT NULL DEFAULT '',
     PRIMARY KEY (product_id, source_key, resource_uri)
 );
 
@@ -185,6 +194,7 @@ class Registry:
         with self._conn() as conn:
             conn.executescript(_SCHEMA)
             _ensure_registry_columns(conn)
+            _migrate_user_roles(conn)
             _backfill_product_members(conn)
         self._seed_defaults()
 
@@ -204,7 +214,7 @@ class Registry:
                 conn.execute(
                     """INSERT INTO users (id, name, role, products_js)
                        VALUES (?,?,?,?)""",
-                    ("admin", "Admin", "org_admin", json.dumps([])),
+                    ("admin", "Admin", "admin", json.dumps([])),
                 )
 
     # ------------------------------------------------------------ products
@@ -242,6 +252,7 @@ class Registry:
         if not row:
             return None
         d = dict(row)
+        d["role"] = _normalize_user_role(str(d.get("role") or "viewer"))
         d["products"] = json.loads(d.pop("products_js"))
         return d
 
@@ -251,26 +262,50 @@ class Registry:
         out: list[dict] = []
         for r in rows:
             d = dict(r)
+            d["role"] = _normalize_user_role(str(d.get("role") or "viewer"))
             d["products"] = json.loads(d.pop("products_js"))
             out.append(d)
         return out
 
 
 def _ensure_registry_columns(conn: sqlite3.Connection) -> None:
+    def _add_column_if_missing(column: str, ddl: str) -> None:
+        if column in existing:
+            return
+        try:
+            conn.execute(ddl)
+        except sqlite3.OperationalError as exc:
+            if "duplicate column name" not in str(exc).lower():
+                raise
+
     existing = {
         row["name"]
         for row in conn.execute("PRAGMA table_info(source_resources)").fetchall()
     }
-    if "enrichment_version" not in existing:
-        conn.execute(
-            "ALTER TABLE source_resources "
-            "ADD COLUMN enrichment_version TEXT NOT NULL DEFAULT ''"
-        )
-    if "enrichment_status" not in existing:
-        conn.execute(
-            "ALTER TABLE source_resources "
-            "ADD COLUMN enrichment_status TEXT NOT NULL DEFAULT ''"
-        )
+    _add_column_if_missing(
+        "enrichment_version",
+        "ALTER TABLE source_resources ADD COLUMN enrichment_version TEXT NOT NULL DEFAULT ''",
+    )
+    _add_column_if_missing(
+        "enrichment_status",
+        "ALTER TABLE source_resources ADD COLUMN enrichment_status TEXT NOT NULL DEFAULT ''",
+    )
+    _add_column_if_missing(
+        "graph_extraction_version",
+        "ALTER TABLE source_resources ADD COLUMN graph_extraction_version TEXT NOT NULL DEFAULT ''",
+    )
+    _add_column_if_missing(
+        "graph_status",
+        "ALTER TABLE source_resources ADD COLUMN graph_status TEXT NOT NULL DEFAULT ''",
+    )
+    _add_column_if_missing(
+        "graph_fact_ids_js",
+        "ALTER TABLE source_resources ADD COLUMN graph_fact_ids_js TEXT NOT NULL DEFAULT '[]'",
+    )
+    _add_column_if_missing(
+        "graph_indexed_at",
+        "ALTER TABLE source_resources ADD COLUMN graph_indexed_at TEXT NOT NULL DEFAULT ''",
+    )
 
 
 def _backfill_product_members(conn: sqlite3.Connection) -> None:
@@ -294,6 +329,15 @@ def _backfill_product_members(conn: sqlite3.Connection) -> None:
                    VALUES (?,?,?,?)""",
                 (str(product_id), row["id"], role, now),
             )
+
+
+def _normalize_user_role(role: str) -> str:
+    return _LEGACY_USER_ROLE_MAP.get(role, role)
+
+
+def _migrate_user_roles(conn: sqlite3.Connection) -> None:
+    for old, new in _LEGACY_USER_ROLE_MAP.items():
+        conn.execute("UPDATE users SET role = ? WHERE role = ?", (new, old))
 
 
 def _row_to_product(row: sqlite3.Row) -> dict:
@@ -468,6 +512,10 @@ def _row_to_resource_manifest(row: sqlite3.Row) -> dict:
     d["embeddingVersion"] = d.pop("embedding_version")
     d["enrichmentVersion"] = d.pop("enrichment_version", "")
     d["enrichmentStatus"] = d.pop("enrichment_status", "")
+    d["graphExtractionVersion"] = d.pop("graph_extraction_version", "")
+    d["graphStatus"] = d.pop("graph_status", "")
+    d["graphFactIds"] = json.loads(d.pop("graph_fact_ids_js", None) or "[]")
+    d["graphIndexedAt"] = d.pop("graph_indexed_at", "")
     d["contentHash"] = d.pop("content_hash")
     d["resourceUri"] = d.pop("resource_uri")
     d["sourceKey"] = d.pop("source_key")
@@ -505,8 +553,9 @@ def add_manifest_methods(cls):
                 """INSERT OR REPLACE INTO source_resources
                    (product_id, source_key, resource_uri, content_hash, mime, size_bytes,
                     last_seen_sync, chunk_ids_js, indexed_at, embedding_version,
-                    enrichment_version, enrichment_status)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    enrichment_version, enrichment_status, graph_extraction_version,
+                    graph_status, graph_fact_ids_js, graph_indexed_at)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (
                     row["product"],
                     row["sourceKey"],
@@ -520,6 +569,10 @@ def add_manifest_methods(cls):
                     row.get("embeddingVersion", ""),
                     row.get("enrichmentVersion", ""),
                     row.get("enrichmentStatus", ""),
+                    row.get("graphExtractionVersion", ""),
+                    row.get("graphStatus", ""),
+                    json.dumps(row.get("graphFactIds", [])),
+                    row.get("graphIndexedAt", ""),
                 ),
             )
 

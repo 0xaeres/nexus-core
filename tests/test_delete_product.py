@@ -11,6 +11,7 @@ from nexus.registry import Registry
 from nexus.retrieval.repomap import repomap_path_for
 from nexus.skills.models import AppliesTo, Citation, Provenance, Skill, SkillProposal
 from nexus.skills.store import SkillStore
+from nexus.tools import delete_product as delete_product_module
 from nexus.tools.delete_product import delete_product
 
 
@@ -30,7 +31,10 @@ def _config(tmp_path: Path) -> NexusConfig:
     )
 
 
-def test_delete_product_dry_run_then_removes_local_state(tmp_path: Path) -> None:
+def test_delete_product_dry_run_then_removes_local_state(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
     cfg = _config(tmp_path)
     registry = Registry(tmp_path / "registry.db")
     queue = ProposalQueue(cfg.storage.proposal_queue)
@@ -106,6 +110,24 @@ def test_delete_product_dry_run_then_removes_local_state(tmp_path: Path) -> None
         conn.execute("CREATE TABLE checkpoints (thread_id TEXT, checkpoint_id TEXT)")
         conn.execute("INSERT INTO checkpoints VALUES (?, ?)", ("cs_1", "ckpt_1"))
 
+    class FakeGraphStore:
+        def __init__(self) -> None:
+            self.deleted: list[str] = []
+
+        async def delete_product(self, *, product_id: str) -> int:
+            self.deleted.append(product_id)
+            return 1
+
+        async def aclose(self) -> None:
+            pass
+
+    graph = FakeGraphStore()
+    monkeypatch.setattr(
+        delete_product_module,
+        "create_graph_store",
+        lambda config: graph,
+    )
+
     dry = asyncio.run(
         delete_product(product_id="demo", config=cfg, dry_run=True, skip_qdrant=True)
     )
@@ -118,10 +140,12 @@ def test_delete_product_dry_run_then_removes_local_state(tmp_path: Path) -> None
     assert dry.checkpoints == 1
     assert registry.get_product("demo") is not None
 
-    asyncio.run(
+    report = asyncio.run(
         delete_product(product_id="demo", config=cfg, dry_run=False, skip_qdrant=True)
     )
 
+    assert report.graph_deleted is True
+    assert graph.deleted == ["demo"]
     assert registry.get_product("demo") is None
     assert registry.list_sources("demo") == []
     assert queue.list(product_id="demo") == []
