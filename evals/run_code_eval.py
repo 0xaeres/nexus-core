@@ -22,8 +22,9 @@ import sys
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
-from evals.code_metrics import mean, ndcg_at_k, recall_at_k
 from evals.common import GoldenItem, load_golden
+from evals.judges.llm import evaluator_client, judge_pairwise_preference
+from evals.metrics import mean, ndcg_at_k, recall_at_k
 from nexus.config import NexusConfig
 from nexus.llm.client import ChatClient
 from nexus.retrieval.evidence import retrieve_evidence
@@ -45,6 +46,7 @@ class CodeQueryScore:
     ndcg_at_10: float
     recall_at_10: float
     pairwise_preferred: bool | None = None  # None when no anti_answer
+    pairwise_reasoning: str = ""
 
 
 @dataclass
@@ -73,21 +75,6 @@ class CodeReport:
         return True
 
 
-_PREF_PROMPT = (
-    "You are a rigorous answer-quality judge. You will be given a QUESTION, "
-    "CONTEXTS retrieved to answer it, and two candidate answers: ANSWER_A and "
-    "ANSWER_B. Decide which answer is more accurate and better grounded in the "
-    "CONTEXTS.\n"
-    "Step 1 — Identify the key facts the QUESTION requires.\n"
-    "Step 2 — Check each answer against the CONTEXTS for accuracy.\n"
-    "Step 3 — Pick the better-grounded answer.\n"
-    'Output ONLY JSON: '
-    '{"reasoning": "step-by-step comparison", '
-    '"choice": "A" | "B", '
-    '"rationale": "1 sentence"}.'
-)
-
-
 async def run(
     *,
     golden_path: Path,
@@ -102,7 +89,7 @@ async def run(
         items = items[:limit]
 
     ctx = RetrievalContext.from_config(config)
-    judge = ChatClient.from_cfg(config.models.council, role="code_eval_judge")
+    judge = evaluator_client(config, role="code_eval_judge")
 
     try:
         results = await asyncio.gather(
@@ -135,31 +122,35 @@ async def _score_one(
     )
     retrieved_ids = [_identify(candidate) for candidate in result.candidates]
     relevant = {f.lower() for f in item.expected_files}
+    retrieved_labels = [_matched_expected_file(rid, relevant) or rid for rid in retrieved_ids]
 
-    # We match retrieved chunk URIs against the (substring of) expected files.
-    matched_ids = [
-        rid for rid in retrieved_ids if any(f in (rid or "").lower() for f in relevant)
-    ]
-    # nDCG uses retrieved positions; we treat retrieved positions whose URI matched
-    # any expected_file as relevant.
-    relevant_set = set(matched_ids) if matched_ids else relevant
-
-    ndcg = ndcg_at_k(retrieved_ids, relevant_set, k=10)
-    recall = recall_at_k(retrieved_ids, relevant_set, k=10)
+    ndcg = ndcg_at_k(retrieved_labels, relevant, k=10)
+    recall = recall_at_k(retrieved_labels, relevant, k=10)
 
     pairwise: bool | None = None
+    pairwise_reasoning = ""
     if item.anti_answer:
-        pairwise = await _pairwise(item, result.candidates, judge)
+        pairwise, pairwise_reasoning = await _pairwise_with_reasoning(
+            item, result.candidates, judge
+        )
 
     return CodeQueryScore(
         id=item.id,
         ndcg_at_10=ndcg,
         recall_at_10=recall,
         pairwise_preferred=pairwise,
+        pairwise_reasoning=pairwise_reasoning,
     )
 
 
 async def _pairwise(item: GoldenItem, hits, judge: ChatClient) -> bool | None:
+    preferred, _ = await _pairwise_with_reasoning(item, hits, judge)
+    return preferred
+
+
+async def _pairwise_with_reasoning(
+    item: GoldenItem, hits, judge: ChatClient
+) -> tuple[bool | None, str]:
     """Run the pairwise preference check with position-bias mitigation.
 
     We run the judgment twice — once with expected=A, once with expected=B —
@@ -170,20 +161,21 @@ async def _pairwise(item: GoldenItem, hits, judge: ChatClient) -> bool | None:
     contexts = "\n---\n".join(
         (getattr(h, "excerpt", "") or "")[:800] for h in hits[:6]
     )
-    ab = await _pairwise_one_order(
+    ab, ab_reason = await _pairwise_one_order_with_reasoning(
         item, contexts=contexts, judge=judge, expected_is_a=True
     )
-    ba = await _pairwise_one_order(
+    ba, ba_reason = await _pairwise_one_order_with_reasoning(
         item, contexts=contexts, judge=judge, expected_is_a=False
     )
+    reasoning = f"AB: {ab_reason} | BA: {ba_reason}".strip()
     if ab is None and ba is None:
-        return None
+        return None, reasoning
     if ab is None:
-        return ba
+        return ba, reasoning
     if ba is None:
-        return ab
+        return ab, reasoning
     # Require the judge to agree on both orderings for a confident preference.
-    return ab and ba
+    return ab and ba, reasoning
 
 
 async def _pairwise_one_order(
@@ -193,37 +185,42 @@ async def _pairwise_one_order(
     judge: ChatClient,
     expected_is_a: bool,
 ) -> bool | None:
-    """Single pairwise judgment; expected_is_a controls position assignment."""
-    answer_a = item.expected_answer if expected_is_a else item.anti_answer
-    answer_b = item.anti_answer if expected_is_a else item.expected_answer
-    user = (
-        f"QUESTION:\n{item.query}\n\n"
-        f"CONTEXTS:\n{contexts}\n\n"
-        f"ANSWER_A:\n{answer_a}\n\n"
-        f"ANSWER_B:\n{answer_b}\n"
+    preferred, _ = await _pairwise_one_order_with_reasoning(
+        item,
+        contexts=contexts,
+        judge=judge,
+        expected_is_a=expected_is_a,
     )
-    try:
-        payload, _ = await judge.chat_json(
-            [
-                {"role": "system", "content": _PREF_PROMPT},
-                {"role": "user", "content": user[:6000]},
-            ],
-            temperature=0.0,
-            # Increased to accommodate CoT reasoning field.
-            max_tokens=250,
-        )
-    except Exception as e:
-        log.warning("pairwise judge failed (expected_is_a=%s): %s", expected_is_a, e)
-        return None
-    choice = str(payload.get("choice", "")).strip().upper()
-    # If expected is A, "A" means correct; if expected is B, "B" means correct.
-    return choice == ("A" if expected_is_a else "B")
+    return preferred
+
+
+async def _pairwise_one_order_with_reasoning(
+    item: GoldenItem,
+    *,
+    contexts: str,
+    judge: ChatClient,
+    expected_is_a: bool,
+) -> tuple[bool | None, str]:
+    """Single pairwise judgment; expected_is_a controls position assignment."""
+    result = await judge_pairwise_preference(
+        judge,
+        question=item.query,
+        contexts=contexts,
+        expected_answer=item.expected_answer,
+        anti_answer=item.anti_answer or "",
+        expected_is_a=expected_is_a,
+    )
+    return result.expected_preferred, result.reasoning
 
 
 def _identify(hit) -> str:
     uri = getattr(hit, "file", "")
     line = getattr(hit, "line", "")
     return f"{uri}:{line}".lower() if uri else hit.chunk_id
+
+
+def _matched_expected_file(retrieved_id: str, relevant: set[str]) -> str | None:
+    return next((path for path in relevant if path in (retrieved_id or "").lower()), None)
 
 
 def _aggregate(results: list[CodeQueryScore]) -> dict[str, float]:

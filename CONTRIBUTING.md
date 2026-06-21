@@ -73,7 +73,7 @@ api/
 ingest/
   chunker.py        tree-sitter (Py/TS/TSX/JS/Rust/Go) + heading-aware markdown
   enricher.py       optional HQE for code | Anthropic Contextual Retrieval for docs
-  embedder.py       Jina v4 via llama.cpp/OpenAI-compatible embeddings
+  embedder.py       OpenAI-compatible embedder client (cloud or local llama.cpp)
   indexer.py        Qdrant upsert + delete-by-id (dense + BM25)
   pipeline.py       run_ingest() — manifest diff → chunk → embed → sparse → upsert → cleanup
   enrichment_worker.py  durable optional background enrichment
@@ -84,7 +84,7 @@ retrieval/
   pipeline.py       retrieve() — dense + BM25 → RRF → rerank
   hybrid.py         RRF merge
   sparse.py         BM25 via fastembed (thread-pooled)
-  reranker.py       Jina Reranker v3 cross-encoder
+  reranker.py       OpenAI-compatible cross-encoder reranker
   repomap.py        tree-sitter symbol outline, persisted per product
 
 council/
@@ -318,8 +318,9 @@ uv run uvicorn nexus.api.app:app --port 8000 --reload
 ```
 
 Default `nexus.yaml.example` uses Qdrant plus DeepInfra Qwen embedding/rerank
-models, so low-resource machines do not need local Jina. Use
-`make local-models-up` when testing the optional `jina-local` profile. Qdrant v1.18+ native
+models, so low-resource machines do not need local model servers. Use
+`make local-models-up` when testing the optional `jina-local` profile
+(llama.cpp serving local Jina v4 embeddings + Jina Reranker v3 for offline/high-resource machines). Qdrant v1.18+ native
 TurboQuant is controlled by `vector_store.quantization`; changing quantization,
 embedding dimension, or collection names requires resync/reindex.
 
@@ -340,7 +341,7 @@ parallel now that enrichment is off: `embed_batch_size=32`,
 
 ### Retrieval model config
 
-When switching away from local Jina, update config deliberately:
+When switching embedding or reranking providers, update config deliberately:
 
 - set `models.embedding.dim` to the provider's output dimension before creating
   Qdrant collections

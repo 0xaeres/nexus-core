@@ -29,7 +29,7 @@ client. The sibling repo `../nexus-ui/` is the Next.js web UI.
   unchanged}` from the SQLite source manifest. Unchanged resources are skipped;
   changed resources are re-embedded before stale old chunk IDs are deleted.
   Don't reintroduce blind full-source upserts.
-- **Retrieval is three stages: dense + BM25 → RRF → Jina reranker.** No
+- **Retrieval is three stages: dense + BM25 → RRF → configured reranker.** No
   classifier, no HyDE, no semantic cache, no graph expansion, no circuit
   breakers. Don't reintroduce them without an eval-set win to justify it.
 - **Chunks carry their context.** Code chunks get HQE (3 hypothetical

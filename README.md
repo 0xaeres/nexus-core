@@ -31,7 +31,7 @@ docs, source credentials, approved guidance, and tenancy boundary.
   embeds changed resources before stale chunk cleanup, and deletes removed
   resources from derived indexes.
 - **Measured retrieval.** The serving path is dense + BM25, reciprocal rank
-  fusion, then Jina reranking. More layers require eval evidence.
+  fusion, then a configured cross-encoder reranker. More layers require eval evidence.
 - **Portable output.** Approved skills are ordinary Agent Skills directories
   served through MCP, so Claude, Codex, Cursor, Continue, and other clients can
   consume the same product guidance.
@@ -99,7 +99,7 @@ Nexus separates source-of-truth state from derived serving state:
 | API | `nexus/api/` | Product, source, council, proposal, skill, setup, auth, and dashboard routes. |
 | Registry | SQLite via `nexus/registry.py` | Products, runtime sources, sync manifests, sync runs, proposal/session metadata. |
 | Ingest | `nexus/ingest/` | Source diff, chunking, optional enrichment, embeddings, sparse vectors, Qdrant writes, stale cleanup. |
-| Retrieval | `nexus/retrieval/` | Dense + BM25 search, RRF merge, Jina rerank, repo map context. |
+| Retrieval | `nexus/retrieval/` | Dense + BM25 search, RRF merge, cross-encoder rerank, graph-local traversal, repo map context. |
 | Council | `nexus/council/` | Planner, expert fanout, synthesizer, repair, eval, finalizer, SSE progress. |
 | Skills | `nexus/skills/` | Agent Skills parsing, storage, provenance, approval write path, Git commit/push. |
 | MCP | `nexus/mcp_server/` | `find_skills`, `get_skill`, `query_code_context`, `hybrid_search_corpus`. |
@@ -291,7 +291,7 @@ environment variables, smoke tests, backup targets, and upgrade steps.
 Common checks:
 
 ```bash
-uv run ruff check nexus tests
+uv run ruff check nexus tests evals
 uv run pytest -q
 ```
 

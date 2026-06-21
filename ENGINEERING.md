@@ -19,7 +19,7 @@ ingest                                              council
 ─────────────                                       ─────────────
 chunker         tree-sitter / heading-aware         drafter
 enricher        optional HQE / Anthropic CR         critic   ← own retrieval
-embedder        Jina v4 (Metal)                     reviser  ← only on blocking
+embedder        OpenAI-compatible client (cloud or local llama.cpp)   reviser  ← only on blocking
 indexer         Qdrant (dense + BM25)                  │
 repomap         tree-sitter symbol outline             ▼
                                                     SkillProposal
@@ -272,9 +272,9 @@ chunk.
 
 ### Embedder (`nexus/ingest/embedder.py`)
 
-OpenAI-compatible client against DeepInfra Qwen3 by default, or a local
-llama.cpp server hosting **Jina Embeddings v4** (`jinaai/jina-embeddings-v4`,
-2048-dim) when `provider: jina-local`. The
+OpenAI-compatible client. Defaults to a cloud inference provider (e.g. DeepInfra
+Qwen3 embeddings), or any local llama.cpp server when `provider: jina-local` or
+another locally-hosted profile is set in `nexus.yaml`. The
 `text_for_embedding()` prefix (`context_summary` from optional enrichment, or
 `context_path`) is included in the input. llama.cpp sometimes reports
 physical-batch token-limit failures as
@@ -850,8 +850,8 @@ This runner uses `evals/golden.jsonl` skill questions. For each query, it:
 
 1. Retrieves the top 8 contexts through the production retrieval pipeline.
 2. Synthesizes a 2-4 sentence answer using only retrieved contexts.
-3. Uses the configured council model as a strict JSON judge for faithfulness
-   and answer relevancy.
+3. Uses the configured evaluator model (or council fallback) as a strict JSON
+   judge for faithfulness and answer correctness.
 4. Computes context recall by checking whether expected file names appear in
    retrieved hit URIs.
 
@@ -859,7 +859,7 @@ Aggregates are simple means over the evaluated items:
 
 ```
 faithfulness      >= 0.85
-answer_relevancy  >= 0.80
+answer_correctness >= 0.80
 context_recall    >= 0.75
 ```
 
@@ -925,8 +925,9 @@ derived index cleanup for offline/local-only recovery.
 - **Qdrant** for vector + sparse storage, with native TurboQuant for dense
   vector compression. **fastembed** backs Qdrant BM25 sparse encoding.
 - **DeepInfra Qwen3** embeddings/reranker are the default low-resource dev
-  profile. Local **Jina v4** embeddings + **Jina Reranker v3** remain available
-  via llama.cpp for high-resource/offline machines.
+  profile. Alternative providers — including local llama.cpp servers — are
+  supported through the same OpenAI-compatible `ModelCfg` by setting
+  `provider`, `model`, `base_url`, and `dim` in `nexus.yaml`.
 - **DeepInfra** (OpenAI-compatible) for council LLMs and optional enrichment in
   dev. Swap the `provider` + `base_url` to point at any compatible endpoint.
 - **MCP** (stdio transport) for the agent-facing skill server.

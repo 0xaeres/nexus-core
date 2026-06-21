@@ -208,12 +208,19 @@ async def _run_retrieval_suite(
     payload = {
         "suite": "retrieval",
         "product_id": product_id,
-        "metrics": {"recall_at_k": report.recall_at_k, "mrr": report.mrr},
+        "metrics": {
+            "recall_at_k": report.recall_at_k,
+            "mrr": report.mrr,
+            "ndcg_at_k": report.ndcg_at_k,
+        },
         "thresholds": {
             recall_threshold_key: float(
                 meta.get(recall_threshold_key, meta.get("min_recall_at_10", 0.0))
             ),
             "min_mrr": float(meta.get("min_mrr", 0.0)),
+            f"min_ndcg_at_{top_k}": float(
+                meta.get(f"min_ndcg_at_{top_k}", meta.get("min_ndcg_at_10", 0.0))
+            ),
         },
         "misses": _retrieval_misses(report),
         "items": [
@@ -228,7 +235,11 @@ async def _run_retrieval_suite(
     }
     output.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     thresholds = payload["thresholds"]
-    passed = report.recall_at_k >= thresholds[recall_threshold_key] and report.mrr >= thresholds["min_mrr"]
+    passed = (
+        report.recall_at_k >= thresholds[recall_threshold_key]
+        and report.mrr >= thresholds["min_mrr"]
+        and report.ndcg_at_k >= thresholds[f"min_ndcg_at_{top_k}"]
+    )
     return SuiteArtifact(
         suite="retrieval",
         passed=passed,

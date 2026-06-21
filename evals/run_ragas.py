@@ -4,14 +4,13 @@ Three scores per query, plus aggregates:
 
 - **faithfulness** - LLM judges whether every claim in the synthesized answer
   is grounded in retrieved contexts.
-- **answer_relevancy** - LLM judges whether the answer addresses the question
-  (and aligns with expected_answer when one is supplied).
+- **answer_correctness** - LLM judges whether the answer matches expected_answer.
 - **context_recall** - fraction of expected_files covered by at least one
   retrieved hit, matched by URI suffix (mirrors tests/eval/harness.matches_expected).
 
 Gates (per Slice 7 plan):
   faithfulness    >= 0.85
-  answer_relevancy >= 0.80
+  answer_correctness >= 0.80
   context_recall   >= 0.75
 
 We don't actually `import ragas` - the ragas package is heavy and its prompts
@@ -32,6 +31,13 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 
 from evals.common import GoldenItem, load_golden
+from evals.judges.llm import (
+    evaluator_client,
+    judge_answer_correctness,
+    judge_faithfulness,
+    judge_score,
+)
+from evals.metrics import mean
 from nexus.config import NexusConfig
 from nexus.llm.client import ChatClient
 from nexus.retrieval.pipeline import RetrievalContext, retrieve
@@ -45,7 +51,7 @@ log = logging.getLogger("evals.ragas")
 @dataclass(frozen=True)
 class Thresholds:
     faithfulness: float = 0.85
-    answer_relevancy: float = 0.80
+    answer_correctness: float = 0.80
     context_recall: float = 0.75
 
 
@@ -56,7 +62,7 @@ class Thresholds:
 class QueryScore:
     id: str
     faithfulness: float
-    answer_relevancy: float
+    answer_correctness: float
     context_recall: float
     answer: str = ""
     notes: str = ""
@@ -80,40 +86,10 @@ class Report:
         t = self.thresholds
         return (
             a.get("faithfulness", 0.0) >= t.faithfulness
-            and a.get("answer_relevancy", 0.0) >= t.answer_relevancy
+            and a.get("answer_correctness", 0.0) >= t.answer_correctness
             and a.get("context_recall", 0.0) >= t.context_recall
         )
 
-
-# ---------------------------------------------------------------- judge prompts
-
-
-_FAITHFULNESS_PROMPT = (
-    "You are a strict faithfulness grader. Given a QUESTION, an ANSWER, and the "
-    "CONTEXTS the answer was supposed to draw from, evaluate whether every "
-    "meaningful factual claim in the ANSWER is supported by the CONTEXTS.\n"
-    "Step 1 — List each factual claim in the ANSWER (one per line).\n"
-    "Step 2 — For each claim, state whether it is directly supported, partially "
-    "supported, or absent from the CONTEXTS.\n"
-    "Step 3 — Assign a score: 1.0 = fully grounded, 0.0 = mostly hallucinated.\n"
-    'Output ONLY JSON: '
-    '{"reasoning": "step-by-step claim check", '
-    '"score": 0.0-1.0, '
-    '"verdict": "faithful" | "partial" | "hallucinated"}.'
-)
-
-_RELEVANCY_PROMPT = (
-    "You are a strict relevancy grader. Given a QUESTION, an ANSWER, and an "
-    "EXPECTED_ANSWER, evaluate how well the answer addresses the question and "
-    "matches the expected content.\n"
-    "Step 1 — Identify the core information need expressed by the QUESTION.\n"
-    "Step 2 — Check whether the ANSWER covers it and aligns with EXPECTED_ANSWER.\n"
-    "Step 3 — Assign a score: 1.0 = fully on point, 0.0 = irrelevant or wrong.\n"
-    'Output ONLY JSON: '
-    '{"reasoning": "step-by-step relevancy check", '
-    '"score": 0.0-1.0, '
-    '"verdict": "relevant" | "partial" | "irrelevant"}.'
-)
 
 _SYNTH_PROMPT = (
     "You are answering on behalf of a code-search assistant. You have ONLY the "
@@ -139,10 +115,7 @@ async def run(
         items = items[:limit]
 
     ctx = RetrievalContext.from_config(config)
-    # Use the dedicated evaluator model if configured to avoid self-preference
-    # bias (the judge should not grade its own generated answers).
-    judge_cfg = config.models.evaluator or config.models.council
-    judge = ChatClient.from_cfg(judge_cfg, role="ragas_judge")
+    judge = evaluator_client(config, role="ragas_judge")
     answerer = ChatClient.from_cfg(config.models.council, role="ragas_answerer")
 
     try:
@@ -187,7 +160,7 @@ async def _score_one(
         return QueryScore(
             id=item.id,
             faithfulness=0.0,
-            answer_relevancy=0.0,
+            answer_correctness=0.0,
             context_recall=0.0,
             answer="",
             notes="no contexts retrieved",
@@ -199,29 +172,29 @@ async def _score_one(
     # 3. Synthesize an answer from contexts
     answer = await _synthesize(answerer, item.query, contexts)
 
-    # 4. LLM-judge faithfulness + relevancy in parallel
-    f, ar = await asyncio.gather(
-        _llm_judge(
+    # 4. LLM-judge faithfulness + correctness in parallel
+    faithfulness, correctness = await asyncio.gather(
+        judge_faithfulness(
             judge,
-            _FAITHFULNESS_PROMPT,
-            user=f"QUESTION:\n{item.query}\n\nANSWER:\n{answer}\n\nCONTEXTS:\n"
-            + "\n---\n".join(contexts[:6]),
+            question=item.query,
+            answer=answer,
+            contexts=contexts,
         ),
-        _llm_judge(
+        judge_answer_correctness(
             judge,
-            _RELEVANCY_PROMPT,
-            user=f"QUESTION:\n{item.query}\n\nANSWER:\n{answer}\n\n"
-            f"EXPECTED_ANSWER:\n{item.expected_answer or '(not provided)'}",
+            question=item.query,
+            answer=answer,
+            expected_answer=item.expected_answer,
         ),
     )
 
     return QueryScore(
         id=item.id,
-        faithfulness=f[0],
-        answer_relevancy=ar[0],
+        faithfulness=faithfulness.score,
+        answer_correctness=correctness.score,
         context_recall=context_recall,
         answer=answer,
-        notes=f"{f[1]} | {ar[1]}",
+        notes=f"{faithfulness.reasoning} | {correctness.reasoning}",
     )
 
 
@@ -243,21 +216,8 @@ async def _synthesize(answerer: ChatClient, question: str, contexts: list[str]) 
 async def _llm_judge(
     judge: ChatClient, system: str, user: str
 ) -> tuple[float, str]:
-    msg = [
-        {"role": "system", "content": system},
-        {"role": "user", "content": user[:6000]},
-    ]
-    try:
-        # Increased max_tokens to accommodate CoT reasoning field.
-        payload, _ = await judge.chat_json(msg, temperature=0.0, max_tokens=400)
-    except Exception as e:
-        log.warning("judge call failed: %s", e)
-        return 0.0, f"judge error: {e}"
-    score = max(0.0, min(1.0, float(payload.get("score", 0.0) or 0.0)))
-    # Prefer the structured `reasoning` field; fall back to legacy `notes` for
-    # backwards-compatibility with any cached/stubbed responses in tests.
-    reasoning = str(payload.get("reasoning") or payload.get("notes", ""))
-    return score, reasoning
+    result = await judge_score(judge, system, user)
+    return result.score, result.reasoning
 
 
 def _heuristic_context_recall(item: GoldenItem, hits) -> float:
@@ -290,13 +250,18 @@ def _any_uri_covers(expected_file: str, retrieved_uris: list[str]) -> bool:
 
 def _aggregate(results: list[QueryScore]) -> dict[str, float]:
     if not results:
-        return {"faithfulness": 0.0, "answer_relevancy": 0.0, "context_recall": 0.0}
+        return {
+            "n": 0,
+            "faithfulness": 0.0,
+            "answer_correctness": 0.0,
+            "context_recall": 0.0,
+        }
     n = len(results)
     return {
         "n": n,
-        "faithfulness": round(sum(r.faithfulness for r in results) / n, 4),
-        "answer_relevancy": round(sum(r.answer_relevancy for r in results) / n, 4),
-        "context_recall": round(sum(r.context_recall for r in results) / n, 4),
+        "faithfulness": round(mean([r.faithfulness for r in results]), 4),
+        "answer_correctness": round(mean([r.answer_correctness for r in results]), 4),
+        "context_recall": round(mean([r.context_recall for r in results]), 4),
     }
 
 
@@ -308,7 +273,10 @@ def _print_summary(report: Report) -> None:
     print(f"RAGAS-style eval - {int(a.get('n', 0))} queries")
     print("=" * 60)
     print(f"  faithfulness      {a.get('faithfulness', 0):.3f}  (>= {t.faithfulness})")
-    print(f"  answer_relevancy  {a.get('answer_relevancy', 0):.3f}  (>= {t.answer_relevancy})")
+    print(
+        f"  answer_correct    {a.get('answer_correctness', 0):.3f}  "
+        f"(>= {t.answer_correctness})"
+    )
     print(f"  context_recall    {a.get('context_recall', 0):.3f}  (>= {t.context_recall})")
     print()
     print("PASS" if report.passed() else "FAIL")

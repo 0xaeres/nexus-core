@@ -20,6 +20,7 @@ import logging
 from dataclasses import dataclass
 from pathlib import Path
 
+from evals.metrics import first_match_rank, mean, mrr, ndcg_by_relevance
 from nexus.config import NexusConfig
 from nexus.retrieval.evidence import EvidenceCandidate, retrieve_evidence
 from nexus.retrieval.hybrid import Hit
@@ -36,6 +37,8 @@ class QueryResult:
     top_k_hits: list[Hit]
     first_match_rank: int | None  # 1-indexed; None if no match in top_k
     tags: list[str]
+    relevance: list[bool] | None = None
+    expected_count: int = 1
 
     @property
     def hit(self) -> bool:
@@ -59,12 +62,21 @@ class EvalReport:
 
     @property
     def mrr(self) -> float:
+        return mrr([r.first_match_rank for r in self.results])
+
+    @property
+    def ndcg_at_k(self) -> float:
         if not self.results:
             return 0.0
-        return sum(
-            (1.0 / r.first_match_rank) if r.first_match_rank else 0.0
+        values = [
+            ndcg_by_relevance(
+                r.relevance or [r.hit],
+                k=self.top_k,
+                relevant_count=max(r.expected_count, 1),
+            )
             for r in self.results
-        ) / self.total
+        ]
+        return mean(values)
 
     def render(self) -> str:
         """Tabular text summary for the CLI / pytest output."""
@@ -73,6 +85,7 @@ class EvalReport:
             f"top_k:         {self.top_k}",
             f"recall@{self.top_k}:    {self.recall_at_k:.3f}",
             f"MRR:           {self.mrr:.3f}",
+            f"nDCG@{self.top_k}:      {self.ndcg_at_k:.3f}",
             "",
             "misses:",
         ]
@@ -169,17 +182,16 @@ async def run_eval(
             except Exception as e:
                 log.warning("retrieve failed for %r: %s", text, e)
                 hits = []
-            first_rank: int | None = None
-            for i, hit in enumerate(hits, start=1):
-                if matches_expected(hit, expected):
-                    first_rank = i
-                    break
+            first_rank = first_match_rank(hits, expected, matches_expected)
+            relevance = [matches_expected(hit, expected) for hit in hits[:top_k]]
             results.append(
                 QueryResult(
                     query=text,
                     top_k_hits=hits,
                     first_match_rank=first_rank,
                     tags=tags,
+                    relevance=relevance,
+                    expected_count=max(len(expected), 1),
                 )
             )
         return EvalReport(results=results, top_k=top_k)

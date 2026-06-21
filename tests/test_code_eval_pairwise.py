@@ -9,7 +9,7 @@ from __future__ import annotations
 import pytest
 
 from evals.common import GoldenItem
-from evals.run_code_eval import _pairwise, _pairwise_one_order
+from evals.run_code_eval import _matched_expected_file, _pairwise, _pairwise_one_order
 
 # --------------------------------------------------------------------------- #
 # Helpers
@@ -35,6 +35,12 @@ def _hit_with_excerpt(excerpt: str) -> object:
     h = _Hit()
     h.excerpt = excerpt  # type: ignore[attr-defined]
     return h
+
+
+def test_matched_expected_file_returns_canonical_expected_path() -> None:
+    relevant = {"src/auth.py", "src/billing.py"}
+    assert _matched_expected_file("/repo/src/auth.py:10", relevant) == "src/auth.py"
+    assert _matched_expected_file("/repo/src/other.py:10", relevant) is None
 
 
 class _StubJudge:
