@@ -147,7 +147,7 @@ sequenceDiagram
   MCP->>Qdrant: Serve product-scoped context
 ```
 
-## Skill Pack Lifecycle
+## Product Skill Lifecycle
 
 ```mermaid
 flowchart TD
@@ -166,7 +166,7 @@ flowchart TD
   Review -->|reject| Stop["No skill written"]
 ```
 
-The council emits Markdown skills, not JSON. Incomplete drafts never enter the
+The council emits one Markdown product skill, not JSON. Incomplete drafts never enter the
 review queue. See [ENGINEERING.md](./ENGINEERING.md) for the full council
 contract.
 

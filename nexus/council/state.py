@@ -1,8 +1,8 @@
 """Council state — flat dict that flows through every LangGraph node.
 
-Three nodes touch this state: Drafter, Critic, Reviser. Each appends to the
-same TypedDict; reducers on the append-only list fields keep concurrent updates
-from clobbering each other.
+The planner, experts, synthesizer, repair, eval, and finalizer pass this
+TypedDict through LangGraph. Reducers on append-only list fields keep
+concurrent expert updates from clobbering each other.
 """
 
 from __future__ import annotations
@@ -84,7 +84,7 @@ class CouncilState(TypedDict, total=False):
     topic: str
     config_path: str
 
-    # Shared evidence — populated by Drafter; Critic adds its own re-retrieval to it.
+    # Shared evidence — planner seeds it; expert and repair nodes add bounded context.
     evidence: Annotated[list[EvidenceChunk], operator.add]
     skill_signals: list[dict]
     skill_plan: list[SkillPlanItem]

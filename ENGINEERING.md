@@ -7,7 +7,7 @@ needs a patch.
 ## Overview
 
 Nexus indexes a product's code + docs, runs a bounded expert council to draft
-a product skill pack, requires humans to approve proposals, and serves the
+a product skill, requires humans to approve proposals, and serves the
 resulting skills (and the raw corpus) over MCP to AI coding clients.
 
 The system is deliberately small. Anything that doesn't move the
@@ -431,17 +431,14 @@ Still out of scope without an eval-set win: HyDE, semantic cache, classifier
 fallbacks, free-form code graph extraction, and circuit breakers. The retrieval
 eval set (§10) is the floor; new layers must improve it.
 
-## 5. Council — Expert Skill Pack
+## 5. Council — Expert Product Skill
 
-`nexus/council/graph.py`. LangGraph state graph for product skill packs:
+`nexus/council/graph.py`. LangGraph state graph for the single product skill:
 
 ```
-START ──► Planner ──► Experts ──► Synthesizer ──► Repair ──► Judge
-                                                               │
-                                  missing evidence && cb == 0? │
-                                                               ├── true ─► Targeted Callback
-                                                               │            └──► Synthesizer
-                                                               └── false ─► Finalizer ─► END
+START ──► Planner ──► Architect ─┐
+                  └─► Domain Expert ├─► Synthesizer ─► Repair ─► Eval ─► Finalizer ─► END
+                  └─► Quality Expert┘
 ```
 
 State (`nexus/council/state.py::CouncilState`):
@@ -452,46 +449,39 @@ class CouncilState(TypedDict, total=False):
     product_id: str
     topic: str
     config_path: str
-    evidence: list[EvidenceChunk]   # reducer-merged: planner + experts + callback
+    evidence: list[EvidenceChunk]   # reducer-merged: planner + experts + repair
     skill_plan: list[SkillPlanItem]
     expert_reports: list[ExpertReport]
     skill_drafts: list[SkillDraft]
-    proposals: list[SkillProposal]  # context, architecture, engineering proposals
-    judge_result: JudgeResult | None
-    callback_count: int             # capped at 1
+    proposals: list[SkillProposal]  # one product_master proposal
+    eval_results: list[SkillEvalResult]
     proposal: SkillProposal | None
     proposal_id: str | None         # primary/master proposal for compatibility
     critique: Critique | None
-    revision_count: int             # capped at 1
+    revision_count: int
     deliberation: list[DeliberationMessage]  # append-only stream
     costs: list[AgentCost]
 ```
 
-### Pack Agents (`nexus/council/agents/pack.py`)
+### Skill Agents (`nexus/council/agents/skill.py`)
 
-Planner retrieves the initial evidence and creates exactly three skill
-outlines: `{product}-context`, `{product}-architecture`, and
-`{product}-engineering`. Expert fanout then runs two bounded lenses: Product
-Mapper and Engineering Mapper. Product Mapper extracts identity, domain
-vocabulary, entities, apps/services/repos, APIs, schemas, auth/tenancy, and
-boundaries. Engineering Mapper extracts commands, toolchain, tests/evals, code
-standards, security/secrets, debugging, and review signals. Experts do fresh
-retrieval so the Synthesizer sees more than the planner's initial chunk pool.
+Planner retrieves the initial evidence and creates exactly one `product_master`
+skill outline. Expert fanout runs three bounded lenses: architect,
+domain_expert, and quality_expert. Each expert produces compact JSON only:
+`summary`, `findings`, and `missing_questions`. Experts do fresh retrieval so
+the Synthesizer sees more than the planner's initial chunk pool.
 
-Synthesizer emits one Markdown skill per outline. The completeness repair loop
-validates every draft against the tier-specific schema and retries missing
+Synthesizer emits one Markdown product skill. The completeness repair loop
+validates the draft against the tier-specific schema and retries missing
 sections or factual citation gaps up to `REPAIR_ATTEMPT_CAP = 3`. Factual
 product claims require citations; procedural guidance does not unless it names
 a concrete product fact. Incomplete skills are never queued: if repair still
 fails, the session stops with `reason="incomplete_skill"`.
 
-Judge checks evidence coverage and may request one targeted expert callback.
-After that callback, the graph re-synthesizes and repairs. A second unresolved
-evidence gap stops the session with `reason="insufficient_evidence"`.
-
-Finalizer parses complete drafts into multiple `SkillProposal` rows. The
-primary/master proposal remains available as `proposal_id` for old clients;
-the full pack is persisted on the session as `proposal_ids`.
+Eval runs deterministic skill checks, including identity, structure, name
+match, citation faithfulness, and trigger quality. Finalizer parses the
+complete draft into one `SkillProposal`. `proposal_id` points at that single
+proposal, and sessions persist `proposal_ids` with one entry.
 
 ### LLM client (`nexus/llm/client.py`)
 
@@ -631,7 +621,7 @@ credentials plus product-scope project keys.
 | Method + path | Purpose |
 |---|---|
 | `GET /products/{id}/council/sessions` | List sessions for a product. |
-| `POST /products/{id}/council/sessions` | Body: `{topic: str}`. Schedules the skill-pack council as a background task. Returns `{session_id}`. |
+| `POST /products/{id}/council/sessions` | Body: `{topic: str}`. Schedules the product-skill council as a background task. Returns `{session_id}`. |
 | `GET /council/sessions/{sid}` | Persisted session row. |
 | `GET /council/sessions/{sid}/stream` | SSE: live deliberation if running; deterministic replay if completed. |
 

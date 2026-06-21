@@ -46,7 +46,7 @@ def test_initial_state_revision_zero() -> None:
     assert state["proposals"] == []
 
 
-def test_build_graph_has_pack_nodes() -> None:
+def test_build_graph_has_skill_nodes() -> None:
     """Smoke: graph has the bounded product-skill council nodes."""
     from nexus.council.graph import CouncilHandles
 

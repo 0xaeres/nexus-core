@@ -93,7 +93,7 @@ async def planner(
     topic = state["topic"]
     product_id = state["product_id"]
     evidence: list[EvidenceChunk] = []
-    result = await _retrieve_pack_evidence(
+    result = await _retrieve_skill_evidence(
         retrieval=retrieval,
         product_id=product_id,
         query=_retrieval_query(topic, suffix=PRODUCT_SKILL_RETRIEVAL_QUERY),
@@ -101,7 +101,7 @@ async def planner(
         graph_store=graph_store,
         skills=await _approved_skills(config, product_id),
     )
-    evidence.extend(_pack_result_to_evidence(result, limit=20))
+    evidence.extend(_skill_result_to_evidence(result, limit=20))
 
     evidence = _select_evidence(evidence, limit=EVIDENCE_CHUNKS_PER_SESSION_CAP)
     if not evidence:
@@ -215,7 +215,7 @@ async def _run_expert(
     stream: bool = False,
 ) -> tuple[ExpertReport, list[EvidenceChunk], TokenUsage]:
     query = _retrieval_query(state["topic"], suffix=f"{name} {charter}")
-    result = await _retrieve_pack_evidence(
+    result = await _retrieve_skill_evidence(
         retrieval=retrieval,
         product_id=state["product_id"],
         query=query,
@@ -223,7 +223,7 @@ async def _run_expert(
         graph_store=graph_store,
         skills=skills or [],
     )
-    fresh = _pack_result_to_evidence(result, limit=8)
+    fresh = _skill_result_to_evidence(result, limit=8)
     payload, usage = await chat.chat_json(
         [
             {
@@ -1419,7 +1419,7 @@ def _retrieval_query(topic: str, *, suffix: str = "", limit: int = 900) -> str:
     return text[:limit].strip() or suffix.strip() or topic[:limit].strip()
 
 
-async def _retrieve_pack_evidence(
+async def _retrieve_skill_evidence(
     *,
     retrieval: RetrievalContext,
     product_id: str,
@@ -1439,7 +1439,7 @@ async def _retrieve_pack_evidence(
     )
 
 
-def _pack_result_to_evidence(result, *, limit: int) -> list[EvidenceChunk]:
+def _skill_result_to_evidence(result, *, limit: int) -> list[EvidenceChunk]:
     if hasattr(result, "candidates"):
         return evidence_set_to_evidence(result, limit=limit)
     return hits_to_evidence(result.hits, limit=limit)

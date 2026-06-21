@@ -24,7 +24,7 @@ from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from langgraph.graph import END, START, StateGraph
 
 from nexus.config import NexusConfig
-from nexus.council.agents import pack
+from nexus.council.agents import skill
 from nexus.council.errors import CouncilAgentError
 from nexus.council.state import CouncilState
 from nexus.graph.store import create_graph_store
@@ -153,7 +153,7 @@ def build_graph(config: NexusConfig, handles: CouncilHandles):
 
     async def planner_node(state: CouncilState) -> dict:
         try:
-            return await pack.planner(
+            return await skill.planner(
                 state,
                 config=config,
                 retrieval=handles.retrieval,
@@ -165,7 +165,7 @@ def build_graph(config: NexusConfig, handles: CouncilHandles):
 
     async def architect_node(state: CouncilState) -> dict:
         try:
-            return await pack.expert(
+            return await skill.expert(
                 state,
                 name="architect",
                 config=config,
@@ -178,7 +178,7 @@ def build_graph(config: NexusConfig, handles: CouncilHandles):
 
     async def domain_expert_node(state: CouncilState) -> dict:
         try:
-            return await pack.expert(
+            return await skill.expert(
                 state,
                 name="domain_expert",
                 config=config,
@@ -191,7 +191,7 @@ def build_graph(config: NexusConfig, handles: CouncilHandles):
 
     async def quality_expert_node(state: CouncilState) -> dict:
         try:
-            return await pack.expert(
+            return await skill.expert(
                 state,
                 name="quality_expert",
                 config=config,
@@ -204,7 +204,7 @@ def build_graph(config: NexusConfig, handles: CouncilHandles):
 
     async def synthesizer_node(state: CouncilState) -> dict:
         try:
-            return await pack.synthesizer(
+            return await skill.synthesizer(
                 state, config=config, chat=handles.chat_synthesizer
             )
         except Exception as e:
@@ -212,7 +212,7 @@ def build_graph(config: NexusConfig, handles: CouncilHandles):
 
     async def repair_node(state: CouncilState) -> dict:
         try:
-            return await pack.repair_loop(
+            return await skill.repair_loop(
                 state, chat=handles.chat_reviser, retrieval=handles.retrieval
             )
         except Exception as e:
@@ -220,13 +220,13 @@ def build_graph(config: NexusConfig, handles: CouncilHandles):
 
     async def evaluator_node(state: CouncilState) -> dict:
         try:
-            return await pack.evaluator(state, chat=handles.chat_critic)
+            return await skill.evaluator(state, chat=handles.chat_critic)
         except Exception as e:
             raise CouncilAgentError("skill_eval", e) from e
 
     async def finalizer_node(state: CouncilState) -> dict:
         try:
-            return await pack.finalizer(state)
+            return await skill.finalizer(state)
         except Exception as e:
             raise CouncilAgentError("finalizer", e) from e
 

@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from nexus.council.agents.pack import (  # private guardrails
+from nexus.council.agents.skill import (  # private guardrails
     _align_citations_to_evidence,
     _anchor_uncited_sections,
     repair_loop,
@@ -247,7 +247,7 @@ def test_validate_product_master_requires_locked_sections_and_citations() -> Non
 
 
 def test_validate_product_skill_rejects_unknown_legacy_shape() -> None:
-    md = _product_skill_body() + "\n## Legacy Heading\nOld pack section.\n"
+    md = _product_skill_body() + "\n## Legacy Heading\nOld skill section.\n"
     report = validate_skill_markdown(md, tier="application")
     assert not report.is_complete
     assert any("unexpected sections" in item for item in report.short_sections)

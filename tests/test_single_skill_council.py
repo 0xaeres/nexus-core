@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 
 from nexus.config import NexusConfig
-from nexus.council.agents import pack
+from nexus.council.agents import skill
 from nexus.council.errors import CouncilNoEvidence
 from nexus.council.skill_catalog import catalog_plan
 from nexus.council.skill_parser import required_sections_for_tier
@@ -77,7 +77,7 @@ class _Chat:
         )
 
 
-class _NoEvalJudgeChat(_Chat):
+class _NoEvalChat(_Chat):
     async def chat_json(self, *_args, **_kwargs):
         raise AssertionError("skill_eval must not call chat_json")
 
@@ -101,7 +101,7 @@ async def test_product_skill_creates_one_proposal_with_fake_retrieval(tmp_path, 
             seed_count=1,
         )
 
-    monkeypatch.setattr(pack, "retrieve_evidence", fake_retrieve)
+    monkeypatch.setattr(skill, "retrieve_evidence", fake_retrieve)
     cfg = _config(tmp_path)
     chat = _Chat()
     retrieval = object()
@@ -112,12 +112,12 @@ async def test_product_skill_creates_one_proposal_with_fake_retrieval(tmp_path, 
         config_path="nexus.yaml",
     )
 
-    state.update(await pack.planner(state, config=cfg, retrieval=retrieval, chat=chat))
-    state.update(await pack.experts(state, retrieval=retrieval, chat=chat))
-    state.update(await pack.synthesizer(state, config=cfg, chat=chat))
-    state.update(await pack.repair_loop(state, chat=chat))
-    state.update(await pack.evaluator(state, chat=chat))
-    state.update(await pack.finalizer(state))
+    state.update(await skill.planner(state, config=cfg, retrieval=retrieval, chat=chat))
+    state.update(await skill.experts(state, retrieval=retrieval, chat=chat))
+    state.update(await skill.synthesizer(state, config=cfg, chat=chat))
+    state.update(await skill.repair_loop(state, chat=chat))
+    state.update(await skill.evaluator(state, chat=chat))
+    state.update(await skill.finalizer(state))
 
     proposals = state["proposals"]
     assert len(proposals) == 1
@@ -157,7 +157,7 @@ async def test_single_expert_streams_json_and_reports_own_cost(tmp_path, monkeyp
             self.stream_values.append(bool(kwargs.get("stream")))
             return await super().chat_json(*_args, **kwargs)
 
-    monkeypatch.setattr(pack, "retrieve_evidence", fake_retrieve)
+    monkeypatch.setattr(skill, "retrieve_evidence", fake_retrieve)
     chat = ExpertChat()
     state: CouncilState = initial_state(
         session_id="cs_1",
@@ -166,7 +166,7 @@ async def test_single_expert_streams_json_and_reports_own_cost(tmp_path, monkeyp
         config_path="nexus.yaml",
     )
 
-    result = await pack.expert(
+    result = await skill.expert(
         state,
         name="architect",
         retrieval=object(),
@@ -205,7 +205,7 @@ async def test_product_skill_eval_is_deterministic_without_model_call() -> None:
         ],
     }
 
-    result = await pack.evaluator(state, chat=_NoEvalJudgeChat())
+    result = await skill.evaluator(state, chat=_NoEvalChat())
 
     assert result["eval_results"][0].status == "passed"
     assert result["costs"] == []
@@ -248,18 +248,18 @@ async def test_eval_uses_repair_supplemental_evidence_beyond_initial_cap() -> No
         ],
     }
 
-    result = await pack.evaluator(state, chat=_NoEvalJudgeChat())
+    result = await skill.evaluator(state, chat=_NoEvalChat())
 
     assert result["eval_results"][0].status == "passed"
     assert [draft.name for draft in result["skill_drafts"]] == ["demo-skill"]
 
 
 @pytest.mark.asyncio
-async def test_fixed_pack_no_evidence_stops_before_drafting(tmp_path, monkeypatch) -> None:
+async def test_single_skill_no_evidence_stops_before_drafting(tmp_path, monkeypatch) -> None:
     async def fake_retrieve(**_kwargs):
         return RetrievalResult(hits=[], seed_count=0)
 
-    monkeypatch.setattr(pack, "retrieve_evidence", fake_retrieve)
+    monkeypatch.setattr(skill, "retrieve_evidence", fake_retrieve)
     state = initial_state(
         session_id="cs_1",
         product_id="demo",
@@ -268,7 +268,7 @@ async def test_fixed_pack_no_evidence_stops_before_drafting(tmp_path, monkeypatc
     )
 
     with pytest.raises(CouncilNoEvidence):
-        await pack.planner(state, config=_config(tmp_path), retrieval=object(), chat=_Chat())
+        await skill.planner(state, config=_config(tmp_path), retrieval=object(), chat=_Chat())
 
 
 @pytest.mark.asyncio
@@ -312,7 +312,7 @@ async def test_eval_failure_keeps_passing_skill_and_reports_failed_skill() -> No
         ],
     }
 
-    result = await pack.evaluator(state, chat=RepairStillBadChat())
+    result = await skill.evaluator(state, chat=RepairStillBadChat())
 
     assert [draft.name for draft in result["skill_drafts"]] == ["demo-skill"]
     statuses = {item.skill_name: item.status for item in result["eval_results"]}

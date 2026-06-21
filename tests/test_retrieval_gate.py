@@ -3,7 +3,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 from nexus.config import ModelCfg, ModelsCfg, NexusConfig
-from nexus.council.agents.pack import _no_evidence_error
+from nexus.council.agents.skill import _no_evidence_error
 from nexus.retrieval.hybrid import Hit
 from nexus.retrieval.pipeline import _apply_quality_gate
 

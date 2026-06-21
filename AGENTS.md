@@ -2,7 +2,7 @@
 
 This is the Python backend for **Nexus**, a sovereign, MCP-native **context
 engine**: it ingests an org's code + docs, runs a bounded expert LLM council to
-draft curated **product skill packs** (human-approved), and serves them via MCP to any AI
+draft one curated **product skill** (human-approved), and serves it via MCP to any AI
 client. The sibling repo `../nexus-ui/` is the Next.js web UI.
 
 ## Read first
@@ -35,7 +35,7 @@ client. The sibling repo `../nexus-ui/` is the Next.js web UI.
 - **Chunks carry their context.** Code chunks get HQE (3 hypothetical
   questions) at ingest; doc chunks get Anthropic's Contextual Retrieval
   blurb. Both prepend at embed time via `text_for_embedding()`.
-- **Council is bounded expert-pack generation.** Planner → expert fanout
+- **Council is bounded single-skill generation.** Planner → expert fanout
   (architect, domain_expert, quality_expert) → Synthesizer →
   completeness Repair (≤3 attempts per skill) → Eval → Finalizer.
   Each expert produces a compact JSON report (summary, findings,
@@ -52,7 +52,7 @@ client. The sibling repo `../nexus-ui/` is the Next.js web UI.
   token-budgeted. Built at sync time, persisted under
   `<state>/repomaps/<product>.json`.
 - **Evidence chunks per session is capped** at `EVIDENCE_CHUNKS_PER_SESSION_CAP = 20`
-  in [`nexus/council/agents/pack.py`](./nexus/council/agents/pack.py).
+  in [`nexus/council/agents/skill.py`](./nexus/council/agents/skill.py).
 
 ## Conventions
 

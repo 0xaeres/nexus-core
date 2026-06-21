@@ -5,7 +5,7 @@ and validates that all required sections are present. Used by the council to
 gate completion: if any required section is missing, the agent fires a
 targeted section-fill prompt.
 
-Pack skill schema (validated):
+Product skill schema (validated):
     # Fixed title                — required
     ## Fixed catalog headings     — exact tier-specific order
     Factual sections             — at least one `[file: path:line]` citation

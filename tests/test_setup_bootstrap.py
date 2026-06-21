@@ -115,7 +115,7 @@ def test_bootstrap_existing_repo_clones_successfully(tmp_path: Path) -> None:
         bootstrap_skills_repo(mode="existing", existing_repo_url=remote_url)
     )
     assert result.created_repo is False
-    assert result.files_seeded == 0  # no starter pack — empty bootstrap
+    assert result.files_seeded == 0  # no starter skill — empty bootstrap
     assert result.commit_sha is None
     assert result.skills_repo_url == remote_url
 

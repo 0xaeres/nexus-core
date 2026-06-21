@@ -32,13 +32,11 @@ written. Only after the new vectors are safely written do we delete stale old
 chunk IDs. A tree-sitter repo map is also persisted for council prompt context.
 
 **Phase 2 — Council (on demand).** A user clicks "Run Council" on a topic.
-A bounded LangGraph skill-pack council runs: Planner retrieves and outlines the
-fixed context, architecture, and engineering skills; Product Mapper extracts
-identity, vocabulary, entities, apps/services, APIs, schemas, and boundaries;
-Engineering Mapper extracts commands, standards, tests/evals, security, and
-debug/review signals; Synthesizer writes Markdown drafts; Repair validates and
-fills missing sections or factual citation gaps; Judge may request one targeted
-callback before Finalizer queues proposals in SQLite. Human approval is still
+A bounded LangGraph product-skill council runs: Planner retrieves evidence and
+outlines one `product_master` skill; architect, domain_expert, and
+quality_expert produce compact JSON reports; Synthesizer writes one Markdown
+draft; Repair validates and fills missing sections or factual citation gaps;
+Eval runs deterministic checks before Finalizer queues one proposal in SQLite. Human approval is still
 required before anything becomes a skill file.
 
 **Phase 3 — Approve & serve.** The user reviews + edits + approves the
@@ -90,13 +88,13 @@ retrieval/
   repomap.py        tree-sitter symbol outline, persisted per product
 
 council/
-  graph.py          LangGraph skill-pack StateGraph
+  graph.py          LangGraph product-skill StateGraph
   state.py          CouncilState TypedDict
   runner.py         Background asyncio task + SSE pub/sub hub
   queue.py          SQLite proposal/session tables
   skill_parser.py   Markdown parser + completeness validator
   agents/
-    pack.py         Planner, experts, synthesizer, repair, judge, finalizer
+    skill.py        Planner, experts, synthesizer, repair, eval, finalizer
     drafter.py      One retrieval call, one LLM call, markdown out, completeness gate
     critic.py       Own fresh retrieval, fixed rubric, severity routing
     reviser.py      Fires only on blocking; same markdown + continuation + gate
@@ -256,35 +254,35 @@ This ordering prevents knowledge-base poisoning:
 3. `runner._run_session`:
    - Publishes `session_start` event on `HUB`.
    - `initial_state(...)` builds the TypedDict.
-   - Enters `council_handles(config)` context (retrieval + 3 chat clients).
-     The pack nodes reuse the configured drafter/critic/reviser chat clients:
-     planner+synthesizer use drafter, experts+judge+callback use critic, and
-     repair uses reviser.
+   - Enters `council_handles(config)` context (retrieval, graph store, and chat clients).
+     The skill nodes reuse the configured drafter/critic/reviser chat clients:
+     planner uses drafter, experts use their role-specific clients,
+     synthesizer uses synthesizer, eval uses critic, and repair uses reviser.
    - Compiles `build_graph()` with the SQLite checkpointer.
    - `compiled.astream(initial, ...)` — for each yielded node update:
      `_publish_node_delta(...)` translates state deltas into SSE events
      (`message`, `cost`, `critique`, `proposal_preview`).
-   - On completion: enqueues every finalized proposal and records both the
-     primary `proposal_id` and full `proposal_ids`.
+   - On completion: enqueues the finalized proposal and records `proposal_id`
+     plus the single-entry `proposal_ids` list.
    - On any node exception: the run is recorded as `failed`, an `error` event
      is streamed, and no proposal is enqueued. Council is all-or-none.
 4. UI's `CouncilSession.tsx` consumes `sessionStreamUrl(sid)` via SSE:
    - Live mode while running; deterministic replay after completion
      (see `council.py::session_stream`).
 
-### Trace 3 — Synthesizer writes a skill pack
+### Trace 3 — Synthesizer writes the product skill
 
-`nexus/council/agents/pack.py`:
+`nexus/council/agents/skill.py`:
 
 1. `retrieve(ctx, product_id, topic, top_k=20, mode="auto")` →
    `RetrievalResult.hits`. Hits become planner `EvidenceChunk`s.
 2. `load_repo_map_for_product(config, product_id)` →
    `repo_map.render(...)`. Planner and Synthesizer use this structure with
    retrieved evidence.
-3. Product Mapper and Engineering Mapper retrieve fresh evidence for product
-   structure, architecture, APIs, schemas, commands, tests, standards, and
-   security signals.
-4. Synthesizer emits Markdown drafts with `chat.chat_markdown(...)`; long
+3. Architect, domain_expert, and quality_expert retrieve fresh evidence for
+   product structure, architecture, APIs, schemas, commands, tests, standards,
+   security signals, and domain language.
+4. Synthesizer emits one Markdown draft with `chat.chat_markdown(...)`; long
    outputs auto-continue on `finish_reason="length"`.
 5. `validate_skill_markdown(body, tier=...)` → missing/short sections and
    uncited factual sections trigger targeted repair, capped at 3 attempts per
@@ -547,7 +545,7 @@ for nDCG@10 `>= 0.75`, Recall@10 `>= 0.80`, and pairwise preference accuracy
 | **Contextual Retrieval (CR)** | Optional Anthropic-style "situate this chunk within the document" prefix; the doc analogue of HQE. Disabled by default. |
 | **repo map** | tree-sitter symbol outline of a product's source tree, injected into council system prompts. |
 | **RRF** | Reciprocal Rank Fusion — how dense and sparse retrieval hits are combined. |
-| **Planner / Experts / Synthesizer / Repair / Judge / Finalizer** | The bounded skill-pack council nodes. |
+| **Planner / Experts / Synthesizer / Repair / Eval / Finalizer** | The bounded product-skill council nodes. |
 
 ## 12. Further reading
 

@@ -23,6 +23,7 @@ from nexus.api.routes import (
     auth,
     council,
     dashboard,
+    metrics,
     products,
     proposals,
     setup,
@@ -174,7 +175,9 @@ async def _authenticate_request(request: Request) -> JSONResponse | None:
     request.state.session = session
     request.state.auth_via = "session"
 
-    if request.method in {"POST", "PUT", "PATCH", "DELETE"}:
+    if request.method in {"POST", "PUT", "PATCH", "DELETE"} and not _is_csrf_exempt(
+        request.url.path
+    ):
         header_token = request.headers.get("x-nexus-csrf", "")
         cookie_token = request.cookies.get(CSRF_COOKIE, "")
         expected = str(session.get("csrf_token") or "")
@@ -200,6 +203,10 @@ def _is_public_path(path: str) -> bool:
         "/setup/status",
     }
     return path in public
+
+
+def _is_csrf_exempt(path: str) -> bool:
+    return path == "/metrics/web-vitals"
 
 
 def _set_security_headers(response, request_id: str) -> None:
@@ -268,6 +275,7 @@ app.include_router(products.router)
 app.include_router(agent.router)
 app.include_router(auth.router)
 app.include_router(dashboard.router)
+app.include_router(metrics.router)
 app.include_router(sources.router)
 app.include_router(council.router)
 app.include_router(skills.router)
