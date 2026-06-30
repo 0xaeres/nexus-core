@@ -92,13 +92,14 @@ def test_python_resource_graph_resolves_imported_calls_to_module() -> None:
 
 
 def test_intra_file_calls_take_precedence_over_imported_name() -> None:
-    """A locally-defined symbol wins; no spurious cross-module edge is emitted."""
+    """A locally-defined symbol wins over a same-named import; no spurious cross-module edge is emitted."""
     resource = ResourceRef(source_id="local:test", uri="app.py", mime="text/x-python")
     graph = extract_resource_graph(
         product_id="prod",
         source_key="src",
         resource=resource,
         content=(
+            "from billing.policy import load_policy\n\n"
             "def read_token():\n"
             "    return load_policy()\n\n"
             "def load_policy():\n"

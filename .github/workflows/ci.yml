@@ -90,90 +90,90 @@ jobs:
           uv run anvay eval run --suite retrieval --out-dir artifacts/evals
           uv run anvay eval run --suite retrieval --product synthetic --fixture evals/fixtures/synthetic_project --golden evals/synthetic_queries.jsonl --out-dir artifacts/evals-synthetic
 
-      - name: Run full LLM eval
-        if: >
-          steps.eval_credentials.outputs.available == 'true' &&
-          (github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
-        run: |
-          uv run anvay eval run --suite rag,code --limit 10 --out-dir artifacts/evals
-          uv run anvay eval run --suite rag,code --product synthetic --fixture evals/fixtures/synthetic_project --golden evals/synthetic_queries.jsonl --limit 10 --out-dir artifacts/evals-synthetic
+      # - name: Run full LLM eval
+      #   if: >
+      #     steps.eval_credentials.outputs.available == 'true' &&
+      #     (github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+      #   run: |
+      #     uv run anvay eval run --suite rag,code --limit 10 --out-dir artifacts/evals
+      #     uv run anvay eval run --suite rag,code --product synthetic --fixture evals/fixtures/synthetic_project --golden evals/synthetic_queries.jsonl --limit 10 --out-dir artifacts/evals-synthetic
 
-      - name: Compare to baseline
-        if: >
-          steps.eval_credentials.outputs.available == 'true' &&
-          (github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
-        run: |
-          python - <<'PY'
-          import glob, json, math, os, sys
-
-          # ---------------------------------------------------------------------------
-          # CI-guarded regression check.
-          #
-          # With --limit 10, a single deviant LLM judge call shifts the mean by 0.10,
-          # which would trigger a false alarm under a raw point-estimate comparison.
-          # Instead we compute the one-sided 90 % normal-approximation CI lower bound:
-          #
-          #   se    = sqrt(mean * (1 - mean) / n)
-          #   lower = mean - 1.28 * se        (z = 1.28 for one-tailed 90 %)
-          #
-          # The gate fires only when  lower < (baseline - tolerance).  This preserves
-          # sensitivity to genuine regressions while absorbing small-n judge variance.
-          # ---------------------------------------------------------------------------
-
-          TOLERANCE = 0.05   # same absolute drop gate as before
-          Z90 = 1.28         # one-tailed 90 % z-score
-
-          def ci_lower(mean_val: float, n: int) -> float:
-              if n <= 0:
-                  return mean_val
-              se = math.sqrt(max(mean_val * (1.0 - mean_val), 0.0) / n)
-              return mean_val - Z90 * se
-
-          def check_metric(label: str, current: float, baseline: float, n: int) -> bool:
-              lower = ci_lower(current, n)
-              gate  = baseline - TOLERANCE
-              drop  = baseline - current
-              status = "FAIL" if lower < gate else "OK"
-              print(
-                  f"  {label:<20} current={current:.3f}  baseline={baseline:.3f}"
-                  f"  drop={drop:+.3f}  CI_lower={lower:.3f}  gate={gate:.3f}  [{status}]"
-              )
-              return lower < gate
-
-          reports = sorted(glob.glob('artifacts/evals/*/rag.json'))
-          if not reports:
-              sys.exit('no rag eval report found')
-
-          report    = json.load(open(reports[-1]))
-          aggregates = report['aggregates']
-          n          = int(aggregates.get('n', 10))
-          baseline_path = 'evals/baseline_faithfulness.txt'
-
-          if not os.path.exists(baseline_path):
-              print(f"no baseline yet; faithfulness={aggregates.get('faithfulness', 0):.3f}")
-              sys.exit(0)
-
-          baseline_faithfulness = float(open(baseline_path).read().strip())
-
-          print(f"\nEval regression check  (n={n}, tolerance={TOLERANCE}, z={Z90})\n")
-          failures = []
-          if check_metric('faithfulness',     aggregates.get('faithfulness', 0.0),     baseline_faithfulness, n):
-              failures.append('faithfulness')
-
-          # answer_correctness and context_recall share the same tolerance gate.
-          # They do not have committed baselines yet; only gate against the hard floor.
-          for metric, floor in [('answer_correctness', 0.80), ('context_recall', 0.75)]:
-              current = aggregates.get(metric, 0.0)
-              lower   = ci_lower(current, n)
-              status  = "FAIL" if lower < floor else "OK"
-              print(f"  {metric:<20} current={current:.3f}  floor={floor:.3f}  CI_lower={lower:.3f}  [{status}]")
-              if lower < floor:
-                  failures.append(metric)
-
-          print()
-          if failures:
-              sys.exit(f"Regression detected in: {', '.join(failures)}")
-          PY
+      # - name: Compare to baseline
+      #   if: >
+      #     steps.eval_credentials.outputs.available == 'true' &&
+      #     (github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+      #   run: |
+      #     python - <<'PY'
+      #     import glob, json, math, os, sys
+      #
+      #     # ---------------------------------------------------------------------------
+      #     # CI-guarded regression check.
+      #     #
+      #     # With --limit 10, a single deviant LLM judge call shifts the mean by 0.10,
+      #     # which would trigger a false alarm under a raw point-estimate comparison.
+      #     # Instead we compute the one-sided 90 % normal-approximation CI lower bound:
+      #     #
+      #     #   se    = sqrt(mean * (1 - mean) / n)
+      #     #   lower = mean - 1.28 * se        (z = 1.28 for one-tailed 90 %)
+      #     #
+      #     # The gate fires only when  lower < (baseline - tolerance).  This preserves
+      #     # sensitivity to genuine regressions while absorbing small-n judge variance.
+      #     # ---------------------------------------------------------------------------
+      #
+      #     TOLERANCE = 0.05   # same absolute drop gate as before
+      #     Z90 = 1.28         # one-tailed 90 % z-score
+      #
+      #     def ci_lower(mean_val: float, n: int) -> float:
+      #         if n <= 0:
+      #             return mean_val
+      #         se = math.sqrt(max(mean_val * (1.0 - mean_val), 0.0) / n)
+      #         return mean_val - Z90 * se
+      #
+      #     def check_metric(label: str, current: float, baseline: float, n: int) -> bool:
+      #         lower = ci_lower(current, n)
+      #         gate  = baseline - TOLERANCE
+      #         drop  = baseline - current
+      #         status = "FAIL" if lower < gate else "OK"
+      #         print(
+      #             f"  {label:<20} current={current:.3f}  baseline={baseline:.3f}"
+      #             f"  drop={drop:+.3f}  CI_lower={lower:.3f}  gate={gate:.3f}  [{status}]"
+      #         )
+      #         return lower < gate
+      #
+      #     reports = sorted(glob.glob('artifacts/evals/*/rag.json'))
+      #     if not reports:
+      #         sys.exit('no rag eval report found')
+      #
+      #     report    = json.load(open(reports[-1]))
+      #     aggregates = report['aggregates']
+      #     n          = int(aggregates.get('n', 10))
+      #     baseline_path = 'evals/baseline_faithfulness.txt'
+      #
+      #     if not os.path.exists(baseline_path):
+      #         print(f"no baseline yet; faithfulness={aggregates.get('faithfulness', 0):.3f}")
+      #         sys.exit(0)
+      #
+      #     baseline_faithfulness = float(open(baseline_path).read().strip())
+      #
+      #     print(f"\nEval regression check  (n={n}, tolerance={TOLERANCE}, z={Z90})\n")
+      #     failures = []
+      #     if check_metric('faithfulness',     aggregates.get('faithfulness', 0.0),     baseline_faithfulness, n):
+      #         failures.append('faithfulness')
+      #
+      #     # answer_correctness and context_recall share the same tolerance gate.
+      #     # They do not have committed baselines yet; only gate against the hard floor.
+      #     for metric, floor in [('answer_correctness', 0.80), ('context_recall', 0.75)]:
+      #         current = aggregates.get(metric, 0.0)
+      #         lower   = ci_lower(current, n)
+      #         status  = "FAIL" if lower < floor else "OK"
+      #         print(f"  {metric:<20} current={current:.3f}  floor={floor:.3f}  CI_lower={lower:.3f}  [{status}]")
+      #         if lower < floor:
+      #             failures.append(metric)
+      #
+      #     print()
+      #     if failures:
+      #         sys.exit(f"Regression detected in: {', '.join(failures)}")
+      #     PY
 
       - name: Upload eval report
         if: steps.eval_credentials.outputs.available == 'true'

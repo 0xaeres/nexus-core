@@ -352,15 +352,15 @@ def _imported_symbol_modules(product_id: str, resource, content: str) -> dict[st
             module, names = match.group(1), match.group(2)
             module_id = _sid("module", product_id, module)
             for local_name in _parse_import_clause(names):
-                out.setdefault(local_name, module_id)
+                out[local_name] = module_id
     else:
         for match in _JS_NAMED_IMPORT_RE.finditer(content):
             default_name, named, module = match.group(1), match.group(2), match.group(3)
             module_id = _sid("module", product_id, module)
             if default_name:
-                out.setdefault(default_name.strip(), module_id)
+                out[default_name.strip()] = module_id
             for local_name in _parse_import_clause(named or ""):
-                out.setdefault(local_name, module_id)
+                out[local_name] = module_id
     return out
 
 

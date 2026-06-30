@@ -5,219 +5,106 @@
 <h1 align="center">Anvay</h1>
 
 <p align="center">
-  <strong>The always-current context brain for your project — served to any AI coding agent over MCP.</strong>
+  <strong>Give every contributor and coding agent a maintainer's map of your project.</strong>
 </p>
 
 <p align="center">
-  Anvay turns your repos and docs into reviewed, cited, eval-backed project
-  intelligence, then serves it to Claude, Codex, Cursor, Continue, and any other
-  MCP-capable client. One source of truth for how your project should be
-  understood, maintained, and changed.
-</p>
-
-<p align="center">
-  <a href="#quick-start">Quick Start</a>
-  ·
-  <a href="#how-it-works">How It Works</a>
-  ·
-  <a href="#use-it-with-your-agent">MCP Usage</a>
-  ·
-  <a href="#under-the-hood">Architecture</a>
-  ·
-  <a href="#repositories">Repositories</a>
+  Anvay turns repos and docs into reviewed, cited project intelligence served
+  directly to AI coding tools over MCP.
 </p>
 
 <p align="center">
   <a href="./LICENSE"><img alt="License: Apache-2.0" src="https://img.shields.io/badge/license-Apache--2.0-7C8CFF.svg"></a>
   <img alt="Python 3.13+" src="https://img.shields.io/badge/python-3.13%2B-12121A.svg">
+  <img alt="FastAPI" src="https://img.shields.io/badge/FastAPI-backend-009688.svg">
   <img alt="MCP-native" src="https://img.shields.io/badge/MCP-native-7C8CFF.svg">
-  <img alt="Hybrid RAG" src="https://img.shields.io/badge/RAG-dense%20%2B%20BM25%20%2B%20graph%20%2B%20rerank-7C8CFF.svg">
-  <img alt="Eval-backed" src="https://img.shields.io/badge/quality-eval--gated-22C55E.svg">
+  <img alt="RAG" src="https://img.shields.io/badge/RAG-dense%20%2B%20BM25%20%2B%20rerank-7C8CFF.svg">
+</p>
+
+<p align="center">
+  <a href="#quick-start">Quick Start</a>
+  ·
+  <a href="#mcp-usage">MCP Usage</a>
+  ·
+  <a href="#system-architecture">Architecture</a>
+  ·
+  <a href="./CONTRIBUTING.md">Contributing</a>
+  ·
+  <a href="./ENGINEERING.md">Engineering Spec</a>
 </p>
 
 ---
 
-## Your project knows more than any single person does
+Open-source projects have a context problem. New contributors do not know where
+to start. Maintainers answer the same questions again and again. Docs drift.
+Issues repeat. AI agents jump into code without understanding project
+conventions, architecture, or blast radius.
 
-That knowledge is scattered — across code, docs, issues, and the heads of a few
-maintainers. New contributors don't know where to start. AI agents jump into
-code without understanding conventions, architecture, or blast radius.
-Maintainers answer the same questions, over and over, forever.
+Anvay turns that scattered project knowledge into something agents can actually
+use: a product-scoped evidence index, a repo map, a dependency graph, and a
+human-approved Agent Skill that captures how the project should be understood
+and changed.
 
-**Anvay fixes this by building a living context brain for your project.** Point
-it at your repositories and docs, and it produces a product-scoped intelligence
-layer — a retrieval index, a symbol-level repo map, a dependency graph, and a
-human-approved playbook — that any AI coding agent can consume directly over the
-Model Context Protocol (MCP).
+Point Anvay at a project, review the generated knowledge pack, then serve it to
+Claude, Codex, Cursor, Continue, and any other MCP-capable coding client.
 
-It stays current as your project changes, it cites its sources, and every answer
-it serves is backed by a continuous evaluation harness. No more agents guessing.
-No more re-explaining your architecture in every chat.
+Anvay calls each isolated knowledge boundary a **product**. For open-source
+users, a product is usually one project or one tightly related set of repos. The
+same engine later fits internal engineering products without changing the core
+model.
 
-## What you get
+## Why Anvay
 
-| | |
+| Open-source pain | What Anvay gives you |
 |---|---|
-| 🧠 **Always-current context** | Delta-safe sync keeps the index in step with your repos. Change a file, and only that file is re-embedded — the brain never goes stale or rebuilds from scratch. |
-| 🔌 **MCP-native by design** | Approved skills and cited project context are served over a standard MCP server. Works out of the box with Claude, Codex, Cursor, Continue, and any MCP client. |
-| 🔎 **Hybrid RAG, not just vectors** | Retrieval blends dense + BM25 search, exact grep, a tree-sitter repo map, graph-local traversal, and approved-skill memory — mixed and reranked into one coverage-aware evidence set. |
-| ✅ **Eval-backed quality** | Every retrieval change is gated by an evaluation harness measuring both deterministic retrieval metrics and LLM-judged answer quality. Quality is a number, not a vibe. |
-| 👤 **Human-approved, agent-drafted** | A bounded expert council drafts a project playbook; a maintainer reviews and approves it before anything is published. Agents propose, humans decide. |
-| 🌍 **Open source & sovereign** | Self-hostable, your data, your models. Run it against public OSS repos or your private engineering products without handing IP to a third party. |
+| New contributors ask, "where do I even start?" | Grounded onboarding answers over code, docs, repo maps, graph context, and maintainer-approved guidance. |
+| AI agents miss project rules. | A reviewed `SKILL.md` loaded into coding agents before they touch code. |
+| Maintainers repeat tribal knowledge. | One reusable project knowledge pack instead of copy-pasting context into every chat. |
+| PRs need impact context. | Product-scoped retrieval plus graph traversal across symbols, files, and dependencies. |
+| OSS launch needs public proof. | Real demos on public repos without asking companies for private IP. |
 
-## Built for maintainers
-
-Anvay is an OSS-first tool that gives every contributor and coding agent a
-maintainer's map of the project. Ask it the questions you're tired of answering:
+Ask Anvay:
 
 - Where should a new contributor start?
 - Which files, conventions, and tests matter for this change?
-- What does this module depend on, and what breaks if it changes?
-- What project-specific rules should every AI coding agent follow?
-- Which tribal knowledge should become a reusable, cited playbook?
+- What does this module depend on, and what might break if it changes?
+- What project-specific guidance should every AI coding agent follow?
+- Which docs or explanations should become a reusable contributor skill?
 
-Anvay calls each isolated knowledge boundary a **product**. For OSS users, a
-product is usually one project or a tightly related set of repos. The same engine
-scales to internal engineering products without changing the core model.
+## What Anvay Produces
 
-## How It Works
+- A product-scoped retrieval index for code and docs.
+- A tree-sitter repo map that helps agents understand symbols and structure.
+- A knowledge graph for answering in-depth queries.
+- An LLM assited, but human-approved `SKILL.md` committed to a skills repo.
+- An MCP server that exposes approved skills and the project context to agents.
 
-Three steps, one source of truth.
-
-```
-  1. CONNECT                2. CURATE                 3. SERVE
-  ─────────────             ─────────────             ─────────────
-  Point Anvay at your       A bounded expert          Approved skills + cited
-  GitHub repos, docs,       council drafts a          context stream to any
-  filesystem, Jira, or      project playbook from     MCP agent. The brain
-  Confluence. It builds     the evidence. You         stays current as your
-  a delta-synced index,     review, edit, and         project changes.
-  repo map, and graph.      approve it as a SKILL.md.
-```
-
-1. **Connect your sources.** Anvay ingests code and docs, chunks them on semantic
-   boundaries (tree-sitter for code, headings for docs), embeds them dense +
-   BM25, extracts a dependency graph, and persists a symbol-level repo map. Every
-   resync is delta-safe — unchanged resources are skipped, changed ones are
-   re-embedded before stale chunks are cleaned up.
-
-2. **Curate a playbook.** On demand, a LangGraph expert council (planner →
-   architect / domain / quality experts → synthesizer → repair → eval) drafts a
-   single `product_master` Agent Skill, grounded in retrieved evidence with
-   file:line citations. Incomplete or unfaithful drafts never reach you — they're
-   caught by deterministic checks plus an LLM faithfulness gate.
-
-3. **Serve it to agents.** You approve the proposal; Anvay writes a `SKILL.md` to
-   your skills repo, indexes it so it's itself retrievable, and exposes it over
-   MCP. From that moment, any connected coding agent loads your project's rules
-   and cited context before it touches code.
+Current source connectors cover GitHub repositories, local filesystems, Jira,
+and Confluence.
 
 ## What Anvay Guarantees
 
-- **Product-scoped tenancy.** Every source, chunk, proposal, session, skill, and
-  query carries `product_id`. There is no cross-product read path.
-- **Human approval before publication.** Agents draft proposals; only an explicit
-  human approval writes a `SKILL.md`.
-- **Delta-safe sync.** Resync reads SQLite manifests, skips unchanged resources,
-  embeds changed resources *before* stale-chunk cleanup, and retires removed
-  resources from the derived indexes. Failed steps never poison the index.
-- **Eval-gated retrieval.** The serving path (`retrieve_evidence()`) is a
-  multi-channel evidence engine — dense + BM25, exact grep, repo-map symbols,
-  graph-local traversal, structural summaries, and approved skills — mixed and
-  cross-encoder reranked. It is gated by an eval harness covering deterministic
-  retrieval metrics (recall@k, ndcg@k, mrr) and LLM-judged answer quality
-  (answer_correctness, context_recall). See [evals/README.md](./evals/README.md).
-- **Portable output.** Approved skills are ordinary Agent Skills directories
-  served through MCP, so every MCP-capable client consumes the same guidance.
+- **Product-scoped tenancy.** Every source, chunk, proposal, session, skill,
+  and retrieval query carries `product_id`.
+- **Human approval before publication.** Agents draft proposals; only explicit
+  approval writes `SKILL.md` files.
+- **Delta-safe sync.** Resync reads manifests, skips unchanged resources,
+  embeds changed resources before stale chunk cleanup, and deletes removed
+  resources from derived indexes.
+- **Measured retrieval.** The serving path is a multi-channel evidence engine
+  managed by `retrieve_evidence()`. It integrates dense + BM25 vector search,
+  exact text grep, repo-map symbol outlines, graph-local path traversal, and
+  approved skill memories. Results are dynamically mixed via cross-encoder
+  reranking and gated by continuous evaluation metrics (e.g., faithfulness ≥ 0.85,
+  nDCG@10 ≥ 0.75).
+- **Portable output.** Approved skills are ordinary Agent Skills served through MCP, so
+  Claude, Codex, Cursor, Continue, and other clients can consume the same product
+  guidance.
 
-## Quick Start
+See [AGENTS.md](./AGENTS.md) for contributor invariants and
+[ENGINEERING.md](./ENGINEERING.md) for the formal backend spec.
 
-**Prerequisites:** Python 3.13+, [`uv`](https://docs.astral.sh/uv/), Docker (or a
-reachable Qdrant), a DeepInfra API key for default cloud embeddings/reranking and
-council LLMs, and the [UI repo](#repositories) cloned alongside this one at
-`../anvay-ui/`.
-
-```bash
-# 1. Install backend deps
-uv sync
-
-# 2. Create local config
-cp anvay.yaml.example anvay.yaml
-cp .env.example .env
-
-# 3. Fill required .env values
-#    LLM_API_KEY=...                    # DeepInfra (or any OpenAI-compatible) key
-#    ANVAY_TOKEN_KEY=...                # generate below
-#    ANVAY_SKILLS_REPO_TOKEN=...        # PAT for the org skills repo
-uv run python -c "from anvay.auth.token_cipher import TokenCipher; print(TokenCipher.generate_key())"
-
-# 4. Start the backend stack (Qdrant + API)
-make dev
-
-# 5. Start the UI (in the sibling repo)
-cd ../anvay-ui && npm install && npm run dev
-```
-
-Open `http://localhost:3000/setup`, connect or create your org skills repo, then
-create a product, add a GitHub source with a service-account PAT, sync it, run the
-council, and approve your first playbook.
-
-> Default config uses cloud Qwen3 embeddings/reranking, so low-resource machines
-> need no local model servers. For fully offline/self-hosted inference, use the
-> `jina-local` profile with `make local-models-up` (llama.cpp). See
-> [CONTRIBUTING.md](./CONTRIBUTING.md) for the local-dev deep dive.
-
-## Use It With Your Agent
-
-Add Anvay as an MCP server. Claude Desktop example:
-
-```json
-{
-  "mcpServers": {
-    "anvay": {
-      "command": "uv",
-      "args": [
-        "--directory", "/absolute/path/to/anvay",
-        "run", "anvay-mcp-server",
-        "--product", "<your-product-id>"
-      ],
-      "env": { "ANVAY_CONFIG": "/absolute/path/to/anvay/anvay.yaml" }
-    }
-  }
-}
-```
-
-Exposed MCP tools:
-
-| Tool                   | Purpose                                                          |
-| ---------------------- | ---------------------------------------------------------------- |
-| `find_skills`          | Find approved product skills for a task or context.              |
-| `get_skill`            | Return one approved skill body.                                  |
-| `query_code_context`   | Retrieve product-scoped source context for a symbol or question. |
-| `hybrid_search_corpus` | Run direct dense + BM25 + rerank corpus search.                  |
-| `report_outcome`       | Record whether a skill helped.                                   |
-
-## Repositories
-
-Anvay ships as two repos that run side by side:
-
-| Repo | Role | Link |
-|---|---|---|
-| **anvay** (this repo) | Python backend — ingestion, hybrid RAG, expert council, MCP server, API. | [github.com/0xaeres/nexus-core](https://github.com/0xaeres/nexus-core) |
-| **anvay-ui** | Next.js web app — onboarding, sync logs, live council sessions, review/approval UX. | [github.com/0xaeres/nexus-ui](https://github.com/0xaeres/nexus-ui) |
-
-Clone them as siblings so the backend's default `../anvay-ui/` paths resolve:
-
-```bash
-git clone git@github.com:0xaeres/nexus-core.git anvay
-git clone git@github.com:0xaeres/nexus-ui.git anvay-ui
-```
-
-## Under the Hood
-
-Anvay separates source-of-truth state (SQLite registry, proposal queue, skills
-checkout) from derived serving state (Qdrant, FalkorDB graph, repo map JSON), so
-the index can always be rebuilt from the manifests without losing approvals.
+## System Architecture
 
 ```mermaid
 flowchart LR
@@ -313,65 +200,283 @@ flowchart LR
   MCP --> Queue
 ```
 
-| Layer     | Component                           | Responsibility                                                                                                                                           |
-| --------- | ----------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| API       | `anvay/api/`                        | Product, source, council, proposal, skill, setup, auth, and dashboard routes.                                                                            |
-| Registry  | SQLite via `anvay/registry.py`      | Products, membership, runtime sources, sync manifests, sync runs, enrichment jobs.                                                                       |
-| Queue     | SQLite via `anvay/council/queue.py` | Council sessions, proposal rows, eval results, improvement signals.                                                                                      |
-| Ingest    | `anvay/ingest/`                     | Source diff, chunking, optional enrichment, embeddings, sparse vectors, graph extraction, derived-index writes, stale cleanup.                           |
-| Retrieval | `anvay/retrieval/`                  | Dense + BM25 search, RRF, rerank, plus evidence assembly from grep, repo-map symbols, graph-local candidates, summaries, and approved skills.            |
-| Council   | `anvay/council/`                    | Planner, expert fanout, synthesizer, repair, eval, finalizer, LangGraph checkpoints, SSE progress.                                                       |
-| Skills    | `anvay/skills/`                     | Agent Skills parsing, storage, provenance, approval write path, Git commit/push, approved-skill indexing.                                                |
-| MCP       | `anvay/mcp_server/`                 | `find_skills`, `get_skill`, `query_code_context`, `hybrid_search_corpus`, and the evidence/graph corpus tools.                                           |
-| UI        | [`anvay-ui`](https://github.com/0xaeres/nexus-ui) | Product onboarding, sync logs, council sessions, review/approval UX.                                                          |
+Anvay separates source-of-truth state from derived serving state:
 
-For the full runtime sequence, the product-skill lifecycle, API contracts, and
-data models, see [ENGINEERING.md](./ENGINEERING.md). For a code-level module map
-and end-to-end traces, see [CONTRIBUTING.md](./CONTRIBUTING.md).
+| Layer | Component | Responsibility |
+|---|---|---|
+| API | `anvay/api/` | Product, source, council, proposal, skill, setup, auth, and dashboard routes. |
+| Registry | SQLite via `anvay/registry.py` | Products, product membership, runtime sources, sync manifests, sync runs, enrichment jobs. |
+| Queue | SQLite via `anvay/council/queue.py` | Council sessions, proposal rows, eval results, improvement signals. |
+| Ingest | `anvay/ingest/` | Source diff, chunking, optional enrichment, embeddings, sparse vectors, graph extraction, derived-index writes, stale cleanup. |
+| Retrieval | `anvay/retrieval/` | Dense + BM25 search, RRF, configured rerank, plus evidence assembly from grep, repo-map symbols, graph-local candidates, summaries, and approved skills. |
+| Council | `anvay/council/` | Planner, expert fanout, synthesizer, repair, eval, finalizer, LangGraph checkpoints, SSE progress. |
+| Skills | `anvay/skills/` | Agent Skills parsing, storage, provenance, approval write path, Git commit/push, approved-skill indexing. |
+| MCP | `anvay/mcp_server/` | `find_skills`, `get_skill`, `query_code_context`, `grep_corpus`, `hybrid_search_corpus`, `evidence_search_corpus`, `ask_product_graph`. |
+| UI | `../anvay-ui/` | Product onboarding, sync logs, council sessions, review/approval UX. |
 
-## Development
+For a code-level module map and end-to-end traces, use
+[CONTRIBUTING.md](./CONTRIBUTING.md). For API contracts and data models, use
+[ENGINEERING.md](./ENGINEERING.md).
 
-```bash
-uv run ruff check anvay tests evals     # lint — must be clean
-uv run pytest -q                        # unit + integration tests
+## Runtime Flow
+
+```mermaid
+sequenceDiagram
+  autonumber
+  actor User
+  participant UI as Anvay UI
+  participant API as FastAPI
+  participant Registry as SQLite registry
+  participant Source as Source adapter
+  participant Ingest as Ingest pipeline
+  participant Qdrant
+  participant Graph as FalkorDB Graph
+  participant RepoMap as Repo map JSON
+  participant Queue as Proposal queue
+  participant Council as Expert council
+  participant Skills as Skills checkout
+  participant MCP as MCP server
+  participant Agent as MCP client
+
+  User->>UI: Create product + add source
+  UI->>API: POST /products + POST /products/{product}/sources
+  API->>Registry: Store product, membership, encrypted source config
+  User->>UI: Sync source
+  UI->>API: POST /products/{product}/sources/{source}/sync
+  API->>Registry: Mark runtime source syncing
+  API-->>UI: Return queued=true
+  API->>Source: Clone repo or open filesystem / Jira / Confluence source
+  Source->>Ingest: Stream resource refs + contents
+  Ingest->>Registry: Load manifest + compute diff
+  Ingest->>Qdrant: Upsert changed code/text chunks with product_id
+  Ingest->>Graph: Upsert changed graph nodes/edges
+  Ingest->>Qdrant: Delete stale chunk IDs after successful upsert
+  Ingest->>Graph: Retire removed graph facts
+  Ingest->>Registry: Persist manifest + sync run counts
+  API->>RepoMap: Save combined symbol outline for product
+  API-->>UI: Stream sync log until done
+
+  User->>UI: Run council
+  UI->>API: POST /products/{product}/council/sessions
+  API->>Queue: Create session + load prior skill signals
+  API->>Council: Start background LangGraph run
+  Council->>Qdrant: Dense + BM25 search, RRF, rerank
+  Council->>RepoMap: Add lexically ranked symbol outline
+  Council->>Graph: Resolve anchors + traverse local graph when useful
+  Council-->>UI: Stream planner/expert/synth/eval events over SSE
+  Council->>Queue: Enqueue complete proposal + eval results
+
+  User->>UI: Review + approve
+  UI->>API: POST /proposals/{proposal}/approve
+  API->>Queue: Load pending proposal
+  API->>Skills: Write SKILL.md, commit, push
+  API->>Qdrant: Embed + index approved skill body
+  API->>Queue: Mark approved + record approval signal
+
+  Agent->>MCP: find_skills / get_skill
+  MCP->>Skills: Load approved product skills
+  Agent->>MCP: query_code_context / hybrid_search_corpus
+  MCP->>Qdrant: Product-scoped dense + BM25 retrieval
+  Agent->>MCP: evidence_search_corpus / ask_product_graph
+  MCP->>Graph: Resolve graph anchors + paths
+  MCP->>Qdrant: Fetch cited evidence
+  Agent->>MCP: report_outcome
+  MCP->>Queue: Record skill outcome signal
 ```
 
-Eval and live checks are opt-in:
+## Product Skill Lifecycle
 
-```bash
-uv run anvay eval run --products <pid>              # unified quality harness (the gate)
-uv run anvay eval run --products <pid> --force-ingest   # clean re-ingest, then evaluate
-uv run pytest -m eval                               # retrieval benchmark (skips if infra absent)
-make test-live-e2e                                  # live Qdrant end-to-end
+```mermaid
+flowchart TD
+  Topic["Council topic"] --> Planner["Planner builds evidence plan"]
+  Planner --> Architect["Architect report"]
+  Planner --> Domain["Domain expert report"]
+  Planner --> Quality["Quality expert report"]
+  Architect --> Synth["Synthesizer writes product_master Markdown"]
+  Domain --> Synth
+  Quality --> Synth
+  Synth --> Repair["Completeness repair loop, max 3 attempts"]
+  Repair --> Eval["Deterministic checks: identity, structure, name, citations, trigger"]
+  Eval --> Complete{"Complete and faithful?"}
+  Complete -- "no" --> Stop["Stop session, no proposal queued"]
+  Complete -- "yes" --> Finalizer["Finalizer emits proposal"]
+  Finalizer --> Queue["Queue pending proposal"]
+  Queue --> Review["Human review"]
+  Review -->|approve| Publish["Write SKILL.md, commit/push, index skill body"]
+  Review -->|edit then approve| Publish
+  Review -->|reject| Reject["Record rejection signal, no skill written"]
 ```
 
-The unified eval harness (`anvay eval run`) is the definitive quality gate. It
-evaluates the full production retrieval path over per-product golden datasets and
-gates on both deterministic retrieval metrics and LLM-judged answer quality. Run
-it after any change to chunking, embedding, enrichment, hybrid search, reranking,
-graph extraction, or evidence assembly. Thresholds and calibration live in
-`evals/harness.py::Thresholds`; see [evals/README.md](./evals/README.md).
+The council emits one Markdown product skill, not JSON. Incomplete drafts never enter the
+review queue. See [ENGINEERING.md](./ENGINEERING.md) for the full council
+contract.
+
+## Quick Start
+
+Prereqs:
+
+- Python 3.13+
+- `uv`
+- Docker or a reachable Qdrant
+- DeepInfra API key for default cloud embeddings/reranking and council LLMs
+- Sibling UI repo at `../anvay-ui/`
+
+Install backend deps:
+
+```bash
+uv sync
+```
+
+Create local config:
+
+```bash
+cp anvay.yaml.example anvay.yaml
+cp .env.example .env
+```
+
+Required `.env` values for normal development:
+
+```bash
+DEEPINFRA_API_KEY=...
+ANVAY_TOKEN_KEY=...
+ANVAY_SKILLS_REPO_TOKEN=...
+```
+
+Generate `ANVAY_TOKEN_KEY`:
+
+```bash
+uv run python -c "from anvay.auth.token_cipher import TokenCipher; print(TokenCipher.generate_key())"
+```
+
+Start the backend stack:
+
+```bash
+make dev
+uv run uvicorn anvay.api.app:app --port 8000 --reload
+```
+
+Start the UI:
+
+```bash
+cd ../anvay-ui
+npm install
+npm run dev
+```
+
+Open `http://localhost:3000/setup` and connect or create the org skills repo.
+Then create a product, add a GitHub source with a product service-account PAT,
+sync it, run council, and review proposals.
+
+## Configuration Notes
+
+- `anvay.yaml` controls source defaults, retrieval backends, model endpoints,
+  Qdrant settings, skills repo paths, and local model profiles.
+- Product GitHub PATs are entered during onboarding and stored encrypted per
+  product source. They are not global credentials.
+- `ANVAY_SKILLS_REPO_TOKEN` is only for creating/cloning/pushing the org skills
+  repository.
+- Qdrant is derived state. SQLite manifests decide what has been successfully
+  indexed.
+- Optional chunk enrichment exists for code HQE and doc contextual retrieval,
+  but default ingest uses fast raw dense + BM25 indexing.
+
+## MCP Usage
+
+Claude Desktop example:
+
+```json
+{
+  "mcpServers": {
+    "anvay": {
+      "command": "uv",
+      "args": [
+        "--directory",
+        "/absolute/path/to/anvay",
+        "run",
+        "anvay-mcp-server",
+        "--product",
+        "<your-product-id>"
+      ],
+      "env": {
+        "ANVAY_CONFIG": "/absolute/path/to/anvay/anvay.yaml"
+      }
+    }
+  }
+}
+```
+
+Exposed MCP tools:
+
+| Tool | Purpose |
+|---|---|
+| `find_skills` | Find approved product skills for a task/context. |
+| `get_skill` | Return one approved skill body. |
+| `query_code_context` | Retrieve product-scoped source context for a symbol or question. |
+| `hybrid_search_corpus` | Run direct dense + BM25 + rerank corpus search. |
+| `report_outcome` | Record whether a skill helped. |
 
 ## Production Deployment
 
-- **Backend:** Oracle VM, Docker Compose, Caddy TLS, FastAPI, private Qdrant.
-- **Frontend:** Vercel running [`anvay-ui`](https://github.com/0xaeres/nexus-ui).
-- **Auth:** Password/session bootstrap and session-based API auth.
-- **Observability:** Langfuse when configured.
+Production target:
 
-The full runbook — environment variables, smoke tests, backup targets, and
-upgrade steps — is in [docs/DEPLOYMENT.md](./docs/DEPLOYMENT.md).
+- Backend: Oracle VM, Docker Compose, Caddy TLS, FastAPI, private Qdrant.
+- Frontend: Vercel running `../anvay-ui/`.
+- Auth: Password/session bootstrap and session-based API auth.
+- Observability: Langfuse when configured.
+
+Use [docs/DEPLOYMENT.md](./docs/DEPLOYMENT.md) for the full runbook,
+environment variables, smoke tests, backup targets, and upgrade steps.
+
+## Development
+
+Common checks:
+
+```bash
+uv run ruff check anvay tests evals
+uv run pytest -q
+```
+
+Retrieval/eval checks are opt-in:
+
+```bash
+uv run anvay eval run --suite retrieval
+uv run pytest -m eval
+uv run python -m evals.run_ragas
+uv run python -m evals.run_code_eval
+make test-live-e2e
+```
+
+### Evaluation Gates & Thresholds
+
+The evaluation harness enforces strict quality gates across three distinct test suites (`retrieval`, `rag`, and `code`). Pull requests and local evaluations must meet or exceed these thresholds:
+
+| Suite | Focus | Target Metric | Required Threshold | Verification Command |
+|---|---|---|---|---|
+| **Retrieval** | Core search quality | Recall@10 | ≥ `0.80` | `uv run anvay eval run --suite retrieval` |
+| | | Mean Reciprocal Rank (MRR) | ≥ `0.50` | |
+| **RAG** | Quality & truthfulness | Faithfulness (LLM-as-a-judge) | ≥ `0.85` | `uv run python -m evals.run_ragas` |
+| | | Answer Correctness (LLM-as-a-judge) | ≥ `0.80` | |
+| | | Context Recall | ≥ `0.75` | |
+| **Code** | Repository understanding | nDCG@10 | ≥ `0.75` | `uv run python -m evals.run_code_eval` |
+| | | Recall@10 | ≥ `0.80` | |
+| | | Pairwise Preference Accuracy | ≥ `0.85` | |
+
+*Note on LLM-as-a-Judge Design:* The in-house judges evaluate faithfulness and correctness asynchronously using Chain-of-Thought (CoT) reasoning to ensure determinism and auditable output. Pairwise preference runs with position-swap bias mitigation (running matches twice swapping A/B positions).
+
+Run retrieval evals after changes to chunking, embedding, optional enrichment,
+hybrid search, reranking, or repo map generation. See
+[evals/README.md](./evals/README.md) for eval harness details and
+[CONTRIBUTING.md](./CONTRIBUTING.md) for contributor workflow.
 
 ## Documentation Map
 
-| File                                           | Use it for                                                    |
-| ---------------------------------------------- | ------------------------------------------------------------- |
-| [AGENTS.md](./AGENTS.md)                       | Non-negotiable invariants, conventions, commit checks.        |
-| [CONTRIBUTING.md](./CONTRIBUTING.md)           | Contributor onboarding, code map, end-to-end traces, recipes. |
-| [ENGINEERING.md](./ENGINEERING.md)             | Formal architecture, data model, API and pipeline contracts.  |
-| [evals/README.md](./evals/README.md)           | Eval harness, golden datasets, quality gates.                 |
-| [docs/DEPLOYMENT.md](./docs/DEPLOYMENT.md)     | Production deployment and operations.                         |
-| [../anvay-ui/DESIGN.md](../anvay-ui/DESIGN.md) | Frontend design system and IA rules.                          |
+| File | Use it for |
+|---|---|
+| [AGENTS.md](./AGENTS.md) | Non-negotiable invariants, conventions, commit checks. |
+| [CONTRIBUTING.md](./CONTRIBUTING.md) | Contributor onboarding, code map, end-to-end traces, recipes. |
+| [ENGINEERING.md](./ENGINEERING.md) | Formal architecture, data model, API and pipeline contracts. |
+| [docs/DEPLOYMENT.md](./docs/DEPLOYMENT.md) | Production deployment and operations. |
+| [../anvay-ui/DESIGN.md](../anvay-ui/DESIGN.md) | Frontend design system and IA rules. |
 
 ## License
 

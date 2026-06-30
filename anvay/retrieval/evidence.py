@@ -320,6 +320,9 @@ async def retrieve_evidence(
         trace.extend(drift_trace)
         reranked = reranked or drift_reranked
         plan.channels_run = _ordered_unique([*plan.channels_run, "drift_lite"])
+        # Reflect actual budget state after the stage ran, not just pre-skip decisions.
+        if _over_budget():
+            plan.budget_exceeded = True
     pooled, mixed_reranked = await rerank_mixed_candidates(ctx=ctx, query=query, candidates=pooled)
     reranked = reranked or mixed_reranked
     if mixed_reranked:
@@ -353,6 +356,9 @@ async def retrieve_evidence(
             reranked = reranked or repair_reranked
             merged = merge_candidates(combined, understanding=understanding, top_k=top_k)
             coverage = assess_coverage(understanding, merged)
+        # Reflect actual budget state after the stage ran, not just pre-skip decisions.
+        if _over_budget():
+            plan.budget_exceeded = True
     plan.coverage = coverage
     plan.graph_paths = _ordered_unique(
         str(candidate.metadata.get("graph_path") or "")

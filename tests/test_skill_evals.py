@@ -145,6 +145,9 @@ class _JudgeChat:
         self.calls += 1
         import json
 
+        # ChatResponse and TokenUsage are dataclasses whose attributes are
+        # accessed via dot notation by _faithfulness_failures, so plain dicts
+        # cannot be used here.
         return ChatResponse(
             content=json.dumps({"unsupported": self._unsupported}),
             usage=TokenUsage(prompt=1, completion=1),
@@ -171,6 +174,8 @@ def _cited_draft() -> SkillDraft:
 
 
 def _rich_evidence() -> list[EvidenceChunk]:
+    # EvidenceChunk must stay as a Pydantic model instance: _cited_claims and
+    # _faithfulness_failures access .file, .line, and .excerpt via dot notation.
     return [
         EvidenceChunk(
             chunk_id="c1",

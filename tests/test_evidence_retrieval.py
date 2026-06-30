@@ -323,6 +323,47 @@ async def test_retrieve_evidence_latency_budget_skips_drift_lite(monkeypatch) ->
 
 
 @pytest.mark.asyncio
+async def test_retrieve_evidence_latency_budget_skips_coverage_repair(monkeypatch) -> None:
+    """Budget exhausted before coverage repair: fallback recorded, repair not run."""
+
+    async def fake_retrieve(**kwargs):
+        # Return a single low-role hit so coverage is likely insufficient for a
+        # global query (missing 'overview' and 'implementation' facets).
+        return RetrievalResult(
+            hits=[
+                Hit(
+                    id="code-1",
+                    score=0.6,
+                    source="rerank",
+                    payload={
+                        "resource_uri": "src/main.py",
+                        "start_line": 1,
+                        "content": "def main(): pass",
+                        "kind": "code",
+                    },
+                )
+            ],
+            reranked=True,
+            seed_count=1,
+        )
+
+    monkeypatch.setattr(evidence, "retrieve", fake_retrieve)
+    result = await retrieve_evidence(
+        ctx=object(),
+        product_id="p",
+        query="explain our overall architecture and design",
+        top_k=6,
+        query_mode="global",  # forces global shape; no drift_lite stage
+        budget_ms=0.0,  # exhausted immediately -> skip optional stages
+    )
+
+    assert result.query_plan is not None
+    assert result.query_plan.budget_exceeded is True
+    assert "latency_budget_skipped_coverage_repair" in result.query_plan.fallbacks
+    assert "coverage_repair" not in result.query_plan.fallbacks
+
+
+@pytest.mark.asyncio
 async def test_retrieve_evidence_combines_hybrid_grep_repomap_graph_and_skills(
     monkeypatch, tmp_path
 ) -> None:

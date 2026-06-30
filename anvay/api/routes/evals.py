@@ -145,6 +145,29 @@ _JOBS: dict[str, EvalJobStatus] = {}
 # Anchor background tasks so the GC does not cancel them mid-flight.
 _RUNNING: set[asyncio.Task] = set()
 
+_MAX_JOBS = 200
+_EVICT_COUNT = 50
+
+
+def _evict_stale_jobs() -> None:
+    """Keep _JOBS bounded. Evict oldest terminal jobs when the dict grows too large.
+
+    The durable record is the per-run ``summary.json`` on disk, so eviction is
+    safe — callers can still load historical runs via the filesystem endpoints.
+    """
+    if len(_JOBS) <= _MAX_JOBS:
+        return
+    terminal = [
+        (jid, status)
+        for jid, status in _JOBS.items()
+        if status.status in {"completed", "failed"}
+    ]
+    terminal.sort(key=lambda t: t[1].started_at)
+    for jid, _ in terminal[:_EVICT_COUNT]:
+        _JOBS.pop(jid, None)
+        # Also clean up the hub's completed set so memory stays bounded.
+        HUB._completed.discard(jid)
+
 
 def _make_job_id() -> str:
     ts = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
@@ -200,6 +223,7 @@ async def _run_eval_job(
         )
     finally:
         await HUB.finish(job_id)
+        _evict_stale_jobs()
 
 
 def _validate_products(request: Request, registry: Registry, products: list[str]) -> list[str]:
@@ -254,19 +278,31 @@ async def start_run(
 
 
 @router.get("/evals/jobs/{job_id}")
-async def get_job(job_id: str) -> EvalJobStatus:
+async def get_job(
+    job_id: str,
+    request: Request,
+    registry: Registry = Depends(get_registry),
+) -> EvalJobStatus:
     status = _JOBS.get(job_id)
     if not status:
         raise HTTPException(status_code=404, detail="job not found")
+    for pid in status.products:
+        assert_product_access(request, registry, pid, action="read")
     return status
 
 
 @router.get("/evals/jobs/{job_id}/stream")
-async def job_stream(job_id: str) -> EventSourceResponse:
+async def job_stream(
+    job_id: str,
+    request: Request,
+    registry: Registry = Depends(get_registry),
+) -> EventSourceResponse:
     """Live stream while the job runs; replay terminal event if already done."""
     status = _JOBS.get(job_id)
     if not status:
         raise HTTPException(status_code=404, detail="job not found")
+    for pid in status.products:
+        assert_product_access(request, registry, pid, action="read")
     if HUB.is_live(job_id):
         return EventSourceResponse(_stream_events(job_id))
 
@@ -281,26 +317,47 @@ async def job_stream(job_id: str) -> EventSourceResponse:
 
 
 @router.get("/evals/runs")
-async def list_runs() -> dict:
-    """Every persisted run artifact, newest first."""
+async def list_runs(
+    request: Request,
+    registry: Registry = Depends(get_registry),
+) -> dict:
+    """Every persisted run artifact the caller can access, newest first."""
     artifacts = [a for a in _load_artifacts() if a is not None]
     artifacts.sort(key=lambda a: a.generated_at, reverse=True)
-    return {"runs": [a.model_dump(mode="json") for a in artifacts]}
+    # Filter to products the caller is allowed to read.
+    accessible = [
+        a for a in artifacts
+        if all(
+            _can_access_product(request, registry, pid)
+            for p in a.products
+            for pid in [p.product_id]
+        )
+    ]
+    return {"runs": [a.model_dump(mode="json") for a in accessible]}
 
 
 @router.get("/evals/runs/{run_id}")
-async def get_run(run_id: str) -> dict:
+async def get_run(
+    run_id: str,
+    request: Request,
+    registry: Registry = Depends(get_registry),
+) -> dict:
     artifact = _load_artifact(run_id)
     if artifact is None:
         raise HTTPException(status_code=404, detail="run not found")
+    for p in artifact.products:
+        assert_product_access(request, registry, p.product_id, action="read")
     payload = artifact.model_dump(mode="json")
     payload["markdown"] = render_markdown(artifact)
     return payload
 
 
 @router.get("/evals/corpus")
-async def get_corpus() -> dict:
-    """The product registry."""
+async def get_corpus(
+    request: Request,
+    registry: Registry = Depends(get_registry),
+) -> dict:
+    """The product registry, filtered to products the caller can read."""
     products = [
         ProductEvalInfo(
             product_id=p.product_id,
@@ -308,6 +365,7 @@ async def get_corpus() -> dict:
             needs_ingest=p.source_path is None,
         )
         for p in PRODUCTS.values()
+        if _can_access_product(request, registry, p.product_id)
     ]
     return {"products": products}
 
@@ -329,6 +387,15 @@ async def _stream_events(job_id: str) -> AsyncIterator[dict]:
             }
     finally:
         await HUB.unsubscribe(job_id, q)
+
+
+def _can_access_product(request: Request, registry: Registry, product_id: str) -> bool:
+    """Return True when the caller is allowed to read the given product."""
+    try:
+        assert_product_access(request, registry, product_id, action="read")
+        return True
+    except HTTPException:
+        return False
 
 
 def _load_artifacts() -> list[EvalRunArtifact | None]:
