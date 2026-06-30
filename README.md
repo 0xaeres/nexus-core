@@ -61,7 +61,6 @@ model.
 | AI agents miss project rules. | A reviewed `SKILL.md` loaded into coding agents before they touch code. |
 | Maintainers repeat tribal knowledge. | One reusable project knowledge pack instead of copy-pasting context into every chat. |
 | PRs need impact context. | Product-scoped retrieval plus graph traversal across symbols, files, and dependencies. |
-| OSS launch needs public proof. | Real demos on public repos without asking companies for private IP. |
 
 Ask Anvay:
 
